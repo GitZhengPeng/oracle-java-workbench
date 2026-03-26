@@ -121,11 +121,11 @@ textarea::placeholder{color:var(--text-muted)}
         <div class="logo-mark">DDL</div>
         <div>
           <h1 class="title">DDL 翻译工作台</h1>
-          <p class="subtitle">Oracle / MySQL / PostgreSQL 建表语句互转 — 支持注释、索引、主键、分区</p>
+          <p class="subtitle">Oracle / MySQL / PostgreSQL 建表语句互转 — 支持注释、索引、主键、外键、分区</p>
         </div>
       </div>
       <div class="version-box">
-        <span class="version">v1.0.0</span>
+        <span class="version">v1.1.0</span>
         <span class="build">Build 2026-03-26 · Vue 3</span>
       </div>
     </section>
@@ -148,6 +148,8 @@ textarea::placeholder{color:var(--text-muted)}
       </div>
       <div class="actions">
         <button class="btn" @click="loadSample">加载示例</button>
+        <button class="btn" @click="uploadFile">上传文件</button>
+        <input type="file" ref="fileInput" accept=".sql,.txt,.ddl" style="display:none" @change="handleFileUpload" />
         <button class="btn" @click="clearAll">清空</button>
         <button class="btn" @click="copyOutput">复制输出</button>
         <button class="btn" @click="saveOutput">保存文件</button>
@@ -184,7 +186,7 @@ textarea::placeholder{color:var(--text-muted)}
           <span class="edit-hint">可直接编辑</span>
           <span class="panel-meta">{{outputMeta}}</span>
         </div>
-        <p class="panel-desc">输出 {{targetLabel}} 兼容的 DDL，包含建表、注释、索引、主键、分区</p>
+        <p class="panel-desc">输出 {{targetLabel}} 兼容的 DDL，包含建表、注释、索引、主键、外键、分区</p>
         <textarea v-model="outputDdl" class="output-area" spellcheck="false" placeholder="点击「开始翻译」后输出结果"></textarea>
       </article>
     </section>
@@ -230,7 +232,7 @@ textarea::placeholder{color:var(--text-muted)}
             <tr><td>SYSDATE</td><td>NOW()</td><td>NOW()</td></tr>
             <tr><td>SYSTIMESTAMP</td><td>NOW(6)</td><td>CLOCK_TIMESTAMP()</td></tr>
           </table>
-          <div class="ref-note">支持 CREATE TABLE、COMMENT ON、CREATE INDEX/UNIQUE INDEX、PRIMARY KEY（内联/ALTER）、PARTITION BY RANGE/LIST/HASH，以及反向转换</div>
+          <div class="ref-note">支持 CREATE TABLE、COMMENT ON、CREATE INDEX/UNIQUE INDEX、PRIMARY KEY（内联/ALTER）、FOREIGN KEY、PARTITION BY RANGE/LIST/HASH，以及反向转换</div>
         </div>
       </div>
     </section>
@@ -307,7 +309,43 @@ COMMENT ON COLUMN T_TRADE_RECORD.TRADE_DATE IS '交易日期-分区键';
 COMMENT ON COLUMN T_TRADE_RECORD.AMOUNT IS '交易金额';
 
 CREATE INDEX IDX_TRADE_CLIENT ON T_TRADE_RECORD(CLIENT_NO, TRADE_DATE) LOCAL;
-CREATE INDEX IDX_TRADE_STATUS ON T_TRADE_RECORD(STATUS);`,
+CREATE INDEX IDX_TRADE_STATUS ON T_TRADE_RECORD(STATUS);
+
+ALTER TABLE T_TRADE_RECORD ADD CONSTRAINT FK_TRADE_CLIENT FOREIGN KEY (CLIENT_NO) REFERENCES T_CLIENT_INFO(CLIENT_NO) ON DELETE CASCADE;
+
+-- 列表分区示例
+CREATE TABLE T_REGION_DATA (
+    REGION_ID    NUMBER(10)    NOT NULL,
+    REGION_CODE  VARCHAR2(10)  NOT NULL,
+    DATA_VALUE   NUMBER(18,2),
+    CONSTRAINT PK_REGION_DATA PRIMARY KEY (REGION_ID)
+)
+PARTITION BY LIST (REGION_CODE) (
+    PARTITION P_EAST VALUES ('SH','NJ','HZ'),
+    PARTITION P_SOUTH VALUES ('GZ','SZ','XM'),
+    PARTITION P_NORTH VALUES ('BJ','TJ','DL'),
+    PARTITION P_WEST VALUES ('CD','CQ','XA')
+);
+
+COMMENT ON TABLE T_REGION_DATA IS '区域数据表-按地区列表分区';
+COMMENT ON COLUMN T_REGION_DATA.REGION_ID IS '区域记录ID';
+COMMENT ON COLUMN T_REGION_DATA.REGION_CODE IS '区域编码-分区键';
+COMMENT ON COLUMN T_REGION_DATA.DATA_VALUE IS '数据值';
+
+-- HASH分区示例
+CREATE TABLE T_LOG_DATA (
+    LOG_ID      NUMBER(18)    NOT NULL,
+    USER_ID     NUMBER(18)    NOT NULL,
+    LOG_MSG     VARCHAR2(500),
+    LOG_TIME    TIMESTAMP     DEFAULT SYSTIMESTAMP,
+    CONSTRAINT PK_LOG_DATA PRIMARY KEY (LOG_ID)
+)
+PARTITION BY HASH (USER_ID) PARTITIONS 8;
+
+COMMENT ON TABLE T_LOG_DATA IS '日志数据表-按用户HASH分区';
+COMMENT ON COLUMN T_LOG_DATA.LOG_ID IS '日志ID';
+COMMENT ON COLUMN T_LOG_DATA.USER_ID IS '用户ID-分区键';
+COMMENT ON COLUMN T_LOG_DATA.LOG_MSG IS '日志内容';`,
 
 mysql: `-- 客户信息主表
 CREATE TABLE t_client_info (
@@ -347,7 +385,8 @@ CREATE TABLE t_trade_record (
     create_time    TIMESTAMP(6)     DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (trade_id, trade_date),
     KEY idx_trade_client (client_no, trade_date),
-    KEY idx_trade_status (status)
+    KEY idx_trade_status (status),
+    CONSTRAINT fk_trade_client FOREIGN KEY (client_no) REFERENCES t_client_info(client_no) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   COMMENT='交易流水记录表-按季度分区'
   PARTITION BY RANGE (TO_DAYS(trade_date)) (
@@ -356,7 +395,33 @@ CREATE TABLE t_trade_record (
     PARTITION p_2024q3 VALUES LESS THAN (TO_DAYS('2024-10-01')),
     PARTITION p_2024q4 VALUES LESS THAN (TO_DAYS('2025-01-01')),
     PARTITION p_max VALUES LESS THAN MAXVALUE
-);`,
+);
+
+-- 列表分区示例
+CREATE TABLE t_region_data (
+    region_id    INT              NOT NULL,
+    region_code  VARCHAR(10)      NOT NULL,
+    data_value   DECIMAL(18,2),
+    PRIMARY KEY (region_id, region_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  COMMENT='区域数据表-按地区列表分区'
+  PARTITION BY LIST COLUMNS(region_code) (
+    PARTITION p_east VALUES IN ('SH','NJ','HZ'),
+    PARTITION p_south VALUES IN ('GZ','SZ','XM'),
+    PARTITION p_north VALUES IN ('BJ','TJ','DL'),
+    PARTITION p_west VALUES IN ('CD','CQ','XA')
+  );
+
+-- HASH分区示例
+CREATE TABLE t_log_data (
+    log_id       BIGINT           NOT NULL,
+    user_id      BIGINT           NOT NULL,
+    log_msg      VARCHAR(500),
+    log_time     TIMESTAMP(6)     DEFAULT CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (log_id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  COMMENT='日志数据表-按用户HASH分区'
+  PARTITION BY HASH(user_id) PARTITIONS 8;`,
 
 postgresql: `-- 客户信息主表
 CREATE TABLE t_client_info (
@@ -425,14 +490,69 @@ COMMENT ON COLUMN t_trade_record.trade_date IS '交易日期-分区键';
 COMMENT ON COLUMN t_trade_record.amount IS '交易金额';
 
 CREATE INDEX idx_trade_client ON t_trade_record(client_no, trade_date);
-CREATE INDEX idx_trade_status ON t_trade_record(status);`
+CREATE INDEX idx_trade_status ON t_trade_record(status);
+
+ALTER TABLE t_trade_record ADD CONSTRAINT fk_trade_client FOREIGN KEY (client_no) REFERENCES t_client_info(client_no) ON DELETE CASCADE;
+
+-- 列表分区示例
+CREATE TABLE t_region_data (
+    region_id    INTEGER          NOT NULL,
+    region_code  VARCHAR(10)      NOT NULL,
+    data_value   NUMERIC(18,2),
+    CONSTRAINT pk_region_data PRIMARY KEY (region_id, region_code)
+) PARTITION BY LIST (region_code);
+
+CREATE TABLE t_region_data_east PARTITION OF t_region_data
+    FOR VALUES IN ('SH','NJ','HZ');
+CREATE TABLE t_region_data_south PARTITION OF t_region_data
+    FOR VALUES IN ('GZ','SZ','XM');
+CREATE TABLE t_region_data_north PARTITION OF t_region_data
+    FOR VALUES IN ('BJ','TJ','DL');
+CREATE TABLE t_region_data_west PARTITION OF t_region_data
+    FOR VALUES IN ('CD','CQ','XA');
+
+COMMENT ON TABLE t_region_data IS '区域数据表-按地区列表分区';
+COMMENT ON COLUMN t_region_data.region_id IS '区域记录ID';
+COMMENT ON COLUMN t_region_data.region_code IS '区域编码-分区键';
+COMMENT ON COLUMN t_region_data.data_value IS '数据值';
+
+-- HASH分区示例
+CREATE TABLE t_log_data (
+    log_id       BIGINT           NOT NULL,
+    user_id      BIGINT           NOT NULL,
+    log_msg      VARCHAR(500),
+    log_time     TIMESTAMP        DEFAULT CLOCK_TIMESTAMP(),
+    CONSTRAINT pk_log_data PRIMARY KEY (log_id, user_id)
+) PARTITION BY HASH (user_id);
+
+CREATE TABLE t_log_data_p0 PARTITION OF t_log_data
+    FOR VALUES WITH (modulus 8, remainder 0);
+CREATE TABLE t_log_data_p1 PARTITION OF t_log_data
+    FOR VALUES WITH (modulus 8, remainder 1);
+CREATE TABLE t_log_data_p2 PARTITION OF t_log_data
+    FOR VALUES WITH (modulus 8, remainder 2);
+CREATE TABLE t_log_data_p3 PARTITION OF t_log_data
+    FOR VALUES WITH (modulus 8, remainder 3);
+CREATE TABLE t_log_data_p4 PARTITION OF t_log_data
+    FOR VALUES WITH (modulus 8, remainder 4);
+CREATE TABLE t_log_data_p5 PARTITION OF t_log_data
+    FOR VALUES WITH (modulus 8, remainder 5);
+CREATE TABLE t_log_data_p6 PARTITION OF t_log_data
+    FOR VALUES WITH (modulus 8, remainder 6);
+CREATE TABLE t_log_data_p7 PARTITION OF t_log_data
+    FOR VALUES WITH (modulus 8, remainder 7);
+
+COMMENT ON TABLE t_log_data IS '日志数据表-按用户HASH分区';
+COMMENT ON COLUMN t_log_data.log_id IS '日志ID';
+COMMENT ON COLUMN t_log_data.user_id IS '用户ID-分区键';
+COMMENT ON COLUMN t_log_data.log_msg IS '日志内容';`
 };
 
 const DB_LABELS = { oracle: 'Oracle', mysql: 'MySQL', postgresql: 'PostgreSQL' };
 
 /* ===== IR (Intermediate Representation) ===== */
 function makeTable() {
-  return { name:'', comment:'', columns:[], primaryKey:null, uniqueKeys:[], indexes:[], partition:null, extra:{} };
+  return { name:'', comment:'', columns:[], primaryKey:null, uniqueKeys:[], indexes:[], foreignKeys:[], partition:null, extra:{} };
 }
 function makeColumn() {
   return { name:'', type:'', precision:null, scale:null, length:null, nullable:true, defaultValue:null, comment:'', autoIncrement:false, rawType:'' };
@@ -448,35 +568,76 @@ function parseOracleDDL(sql) {
   // Phase 1: parse CREATE TABLE
   for (const stmt of stmts) {
     const s = stmt.trim();
-    const ctm = s.match(/^CREATE\s+TABLE\s+(?:[\w"]+\.)?["']?(\w+)["']?\s*\(([\s\S]+)\)/i);
-    if (!ctm) continue;
+    const ctHeader = s.match(/^CREATE\s+TABLE\s+(?:[\w"]+\.)?["']?(\w+)["']?\s*\(/i);
+    if (!ctHeader) continue;
     const tbl = makeTable();
-    tbl.name = ctm[1];
-    let body = ctm[2];
-    // Extract partition clause after closing paren
-    const afterParen = s.slice(s.indexOf(body) + body.length + 1);
-    const partM = afterParen.match(/PARTITION\s+BY\s+(RANGE|LIST|HASH)\s*\(([^)]+)\)\s*\(([\s\S]+)\)/i);
-    if (partM) {
-      tbl.partition = { type: partM[1].toUpperCase(), columns: partM[2].split(',').map(c=>c.trim()), partitions: [] };
-      const pBody = partM[3];
-      const pRe = /PARTITION\s+(\w+)\s+VALUES\s+LESS\s+THAN\s*\(([^)]*)\)/gi;
-      let pm;
-      while ((pm = pRe.exec(pBody))) {
-        tbl.partition.partitions.push({ name: pm[1], value: pm[2].trim() });
-      }
-      // LIST
-      const plRe = /PARTITION\s+(\w+)\s+VALUES\s*\(([^)]+)\)/gi;
-      if (!tbl.partition.partitions.length) {
-        while ((pm = plRe.exec(pBody))) {
-          tbl.partition.partitions.push({ name: pm[1], value: pm[2].trim() });
-        }
-      }
+    tbl.name = ctHeader[1];
+    // Extract body by balanced-paren matching from the opening paren
+    const openIdx = s.indexOf('(', ctHeader[0].length - 1);
+    let depth = 0, inQ = false, bodyEnd = -1;
+    for (let i = openIdx; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === "'" && !inQ) { inQ = true; continue; }
+      if (ch === "'" && inQ) { if (i+1 < s.length && s[i+1] === "'") { i++; } else { inQ = false; } continue; }
+      if (inQ) continue;
+      if (ch === '(') depth++;
+      if (ch === ')') { depth--; if (depth === 0) { bodyEnd = i; break; } }
     }
-    // Also handle: PARTITION BY RANGE ... VALUES LESS THAN (MAXVALUE) with no parens
-    if (!partM) {
-      const partM2 = afterParen.match(/PARTITION\s+BY\s+(RANGE|LIST|HASH)\s*\(([^)]+)\)/i);
-      if (partM2) {
-        tbl.partition = { type: partM2[1].toUpperCase(), columns: partM2[2].split(',').map(c=>c.trim()), partitions: [] };
+    if (bodyEnd === -1) continue;
+    let body = s.slice(openIdx + 1, bodyEnd);
+    // Everything after the closing paren of column defs
+    const afterParen = s.slice(bodyEnd + 1).trim();
+    const partHeaderM = afterParen.match(/PARTITION\s+BY\s+(RANGE|LIST|HASH)\s*\(([^)]+)\)/i);
+    if (partHeaderM) {
+      const partType = partHeaderM[1].toUpperCase();
+      const partCols = partHeaderM[2].split(',').map(c=>c.trim());
+      tbl.partition = { type: partType, columns: partCols, partitions: [], hashCount: null };
+      const afterHeader = afterParen.slice(afterParen.indexOf(partHeaderM[0]) + partHeaderM[0].length).trim();
+
+      if (partType === 'HASH') {
+        // HASH: look for PARTITIONS n (no sub-defs)
+        const hashM = afterHeader.match(/PARTITIONS\s+(\d+)/i);
+        if (hashM) tbl.partition.hashCount = parseInt(hashM[1]);
+      } else {
+        // RANGE or LIST: extract partition body by tracking paren depth
+        const pBody = extractParenBody(afterHeader);
+        if (pBody) {
+          if (partType === 'RANGE') {
+            // Parse RANGE partitions with nested paren support
+            const pRe = /PARTITION\s+(\w+)\s+VALUES\s+LESS\s+THAN\s*/gi;
+            let pm;
+            while ((pm = pRe.exec(pBody))) {
+              const pName = pm[1];
+              const rest = pBody.slice(pRe.lastIndex).trim();
+              let val;
+              if (rest.startsWith('(')) {
+                val = extractParenBody(rest);
+              } else {
+                // MAXVALUE without parens
+                const mxM = rest.match(/^(MAXVALUE)\b/i);
+                val = mxM ? 'MAXVALUE' : '';
+                // Advance lastIndex past the matched word
+                if (mxM) pRe.lastIndex = pm.index + pm[0].length + mxM[0].length;
+              }
+              tbl.partition.partitions.push({ name: pName, value: (val || '').trim() });
+            }
+          } else if (partType === 'LIST') {
+            // Parse LIST partitions: PARTITION p1 VALUES ('A','B','C')
+            const pRe = /PARTITION\s+(\w+)\s+VALUES\s*/gi;
+            let pm;
+            while ((pm = pRe.exec(pBody))) {
+              const pName = pm[1];
+              const rest = pBody.slice(pRe.lastIndex).trim();
+              let vals;
+              if (rest.startsWith('(')) {
+                vals = extractParenBody(rest);
+              } else {
+                vals = '';
+              }
+              tbl.partition.partitions.push({ name: pName, values: splitListValues(vals || '') });
+            }
+          }
+        }
       }
     }
 
@@ -494,6 +655,11 @@ function parseOracleDDL(sql) {
       // UNIQUE constraint
       const uqm = p.match(/^(?:CONSTRAINT\s+(\w+)\s+)?UNIQUE\s*\(([^)]+)\)/i);
       if (uqm) { tbl.uniqueKeys.push({ name: uqm[1]||'UQ_'+tbl.name, columns: uqm[2].split(',').map(c=>c.trim()) }); continue; }
+      // FOREIGN KEY constraint (inline)
+      const fkm = p.match(/^(?:CONSTRAINT\s+(\w+)\s+)?FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+(?:[\w"]+\.)?["']?(\w+)["']?\s*\(([^)]+)\)(?:\s+ON\s+DELETE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?(?:\s+ON\s+UPDATE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?/i);
+      if (fkm) { tbl.foreignKeys.push({ name: fkm[1]||'FK_'+tbl.name, columns: fkm[2].split(',').map(c=>c.trim()), refTable: fkm[3], refColumns: fkm[4].split(',').map(c=>c.trim()), onDelete: fkm[5]||null, onUpdate: fkm[6]||null }); continue; }
+      // Skip CHECK constraint
+      if (/^(CHECK)\b/i.test(p)) continue;
       // Column definition
       const col = parseOracleColumn(p);
       if (col) tbl.columns.push(col);
@@ -540,6 +706,15 @@ function parseOracleDDL(sql) {
     if (!am) continue;
     const tbl = tables.find(t => t.name.toUpperCase() === am[1].toUpperCase());
     if (tbl && !tbl.primaryKey) tbl.primaryKey = { name: am[2]||'PK_'+tbl.name, columns: am[3].split(',').map(c=>c.trim()) };
+  }
+
+  // Phase 5: ALTER TABLE ADD FOREIGN KEY
+  for (const stmt of stmts) {
+    const s = stmt.trim();
+    const fm = s.match(/^ALTER\s+TABLE\s+(?:[\w"]+\.)?["']?(\w+)["']?\s+ADD\s+(?:CONSTRAINT\s+(\w+)\s+)?FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+(?:[\w"]+\.)?["']?(\w+)["']?\s*\(([^)]+)\)(?:\s+ON\s+DELETE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?(?:\s+ON\s+UPDATE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?/i);
+    if (!fm) continue;
+    const tbl = tables.find(t => t.name.toUpperCase() === fm[1].toUpperCase());
+    if (tbl) tbl.foreignKeys.push({ name: fm[2]||'FK_'+tbl.name, columns: fm[3].split(',').map(c=>c.trim()), refTable: fm[4], refColumns: fm[5].split(',').map(c=>c.trim()), onDelete: fm[6]||null, onUpdate: fm[7]||null });
   }
 
   return tables;
@@ -612,6 +787,36 @@ function splitColumnDefs(body) {
   return result;
 }
 
+/* Helper: extract body between first matching parens, handling nesting */
+function extractParenBody(str) {
+  const start = str.indexOf('(');
+  if (start === -1) return null;
+  let depth = 0, inQ = false;
+  for (let i = start; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === "'" && !inQ) { inQ = true; continue; }
+    if (ch === "'" && inQ) { if (i+1 < str.length && str[i+1] === "'") { i++; } else { inQ = false; } continue; }
+    if (inQ) continue;
+    if (ch === '(') depth++;
+    if (ch === ')') { depth--; if (depth === 0) return str.slice(start + 1, i); }
+  }
+  return str.slice(start + 1);
+}
+
+/* Helper: split comma-separated list values, respecting quotes */
+function splitListValues(str) {
+  const result = []; let buf = '', inQ = false;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === "'" && !inQ) { inQ = true; buf += ch; continue; }
+    if (ch === "'" && inQ) { if (i+1 < str.length && str[i+1] === "'") { buf += "''"; i++; } else { inQ = false; } buf += ch; continue; }
+    if (ch === ',' && !inQ) { result.push(buf.trim()); buf = ''; continue; }
+    buf += ch;
+  }
+  if (buf.trim()) result.push(buf.trim());
+  return result;
+}
+
 /* ===== MYSQL PARSER ===== */
 function parseMySQLDDL(sql) {
   const tables = [];
@@ -620,30 +825,110 @@ function parseMySQLDDL(sql) {
 
   for (const stmt of stmts) {
     const s = stmt.trim();
-    // Match CREATE TABLE ... (...) options
-    const ctm = s.match(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"']?(\w+)[`"']?\s*\(([\s\S]+)\)\s*([\s\S]*?)$/i);
-    if (!ctm) continue;
+    // Match CREATE TABLE header
+    const ctHeader = s.match(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"']?(\w+)[`"']?\s*\(/i);
+    if (!ctHeader) continue;
     const tbl = makeTable();
-    tbl.name = ctm[1];
-    const opts = ctm[3] || '';
+    tbl.name = ctHeader[1];
+    // Extract body by balanced-paren matching
+    const openIdx = s.indexOf('(', ctHeader[0].length - 1);
+    let depth = 0, inQ = false, bodyEnd = -1;
+    for (let i = openIdx; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === "'" && !inQ) { inQ = true; continue; }
+      if (ch === "'" && inQ) { if (i+1 < s.length && s[i+1] === "'") { i++; } else { inQ = false; } continue; }
+      if (inQ) continue;
+      if (ch === '(') depth++;
+      if (ch === ')') { depth--; if (depth === 0) { bodyEnd = i; break; } }
+    }
+    if (bodyEnd === -1) continue;
+    const bodyContent = s.slice(openIdx + 1, bodyEnd);
+    const opts = s.slice(bodyEnd + 1).trim();
 
     // Table comment from options
     const tcm = opts.match(/COMMENT\s*=?\s*'((?:''|[^'])*)'/i);
     if (tcm) tbl.comment = tcm[1].replace(/''/g, "'");
 
     // Partition from options
-    const partM = opts.match(/PARTITION\s+BY\s+(RANGE|LIST|HASH)\s*(?:\(([^)]+)\)|COLUMNS\s*\(([^)]+)\))\s*\(([\s\S]+)\)/i);
-    if (partM) {
-      tbl.partition = { type: partM[1].toUpperCase(), columns: (partM[2]||partM[3]).split(',').map(c=>c.trim().replace(/[`"']/g,'')), partitions: [] };
-      const pBody = partM[4];
-      const pRe = /PARTITION\s+[`"']?(\w+)[`"']?\s+VALUES\s+LESS\s+THAN\s*(?:\(([^)]*)\)|(\w+))/gi;
-      let pm;
-      while ((pm = pRe.exec(pBody))) {
-        tbl.partition.partitions.push({ name: pm[1], value: pm[2] !== undefined ? pm[2].trim() : pm[3] });
+    const partTypeM = opts.match(/PARTITION\s+BY\s+(RANGE|LIST|HASH)\s*/i);
+    if (partTypeM) {
+      const partType = partTypeM[1].toUpperCase();
+      const afterType = opts.slice(opts.indexOf(partTypeM[0]) + partTypeM[0].length).trim();
+      let colStr;
+      let restAfterCols;
+      // Handle COLUMNS(...) syntax for LIST
+      const colsKwM = afterType.match(/^COLUMNS\s*\(/i);
+      if (colsKwM) {
+        colStr = extractParenBody(afterType);
+        restAfterCols = afterType.slice(afterType.indexOf('('));
+        // skip past the COLUMNS(...) block
+        let d=0,q=false;
+        for(let i=0;i<restAfterCols.length;i++){const c=restAfterCols[i];if(c==="'"&&!q){q=true;continue;}if(c==="'"&&q){if(i+1<restAfterCols.length&&restAfterCols[i+1]==="'"){i++;}else{q=false;}continue;}if(q)continue;if(c==='(')d++;if(c===')'){d--;if(d===0){restAfterCols=restAfterCols.slice(i+1).trim();break;}}}
+      } else if (afterType.startsWith('(')) {
+        colStr = extractParenBody(afterType);
+        // skip past the (...) block
+        restAfterCols = afterType.slice(afterType.indexOf('('));
+        let d=0,q=false;
+        for(let i=0;i<restAfterCols.length;i++){const c=restAfterCols[i];if(c==="'"&&!q){q=true;continue;}if(c==="'"&&q){if(i+1<restAfterCols.length&&restAfterCols[i+1]==="'"){i++;}else{q=false;}continue;}if(q)continue;if(c==='(')d++;if(c===')'){d--;if(d===0){restAfterCols=restAfterCols.slice(i+1).trim();break;}}}
+      } else {
+        colStr = '';
+        restAfterCols = afterType;
+      }
+
+      // For RANGE with TO_DAYS(col), extract just the col name
+      let partCols;
+      const fnM = (colStr||'').match(/^\w+\s*\(\s*[`"']?(\w+)[`"']?\s*\)$/i);
+      if (fnM) {
+        partCols = [fnM[1]];
+      } else {
+        partCols = (colStr||'').split(',').map(c=>c.trim().replace(/[`"']/g,''));
+      }
+      tbl.partition = { type: partType, columns: partCols, partitions: [], hashCount: null };
+
+      if (partType === 'HASH') {
+        // HASH: look for PARTITIONS n, no sub-defs
+        const hashM = opts.match(/PARTITIONS\s+(\d+)/i);
+        if (hashM) tbl.partition.hashCount = parseInt(hashM[1]);
+      } else {
+        // Extract partition body with paren tracking
+        const pBody = extractParenBody(restAfterCols);
+        if (pBody) {
+          if (partType === 'RANGE') {
+            const pRe = /PARTITION\s+[`"']?(\w+)[`"']?\s+VALUES\s+LESS\s+THAN\s*/gi;
+            let pm;
+            while ((pm = pRe.exec(pBody))) {
+              const pName = pm[1];
+              const rest = pBody.slice(pRe.lastIndex).trim();
+              let val;
+              if (rest.startsWith('(')) {
+                val = extractParenBody(rest);
+              } else {
+                const mxM = rest.match(/^(MAXVALUE)\b/i);
+                val = mxM ? 'MAXVALUE' : '';
+                if (mxM) pRe.lastIndex = pm.index + pm[0].length + mxM[0].length;
+              }
+              tbl.partition.partitions.push({ name: pName, value: (val || '').trim() });
+            }
+          } else if (partType === 'LIST') {
+            const pRe = /PARTITION\s+[`"']?(\w+)[`"']?\s+VALUES\s+IN\s*/gi;
+            let pm;
+            while ((pm = pRe.exec(pBody))) {
+              const pName = pm[1];
+              const rest = pBody.slice(pRe.lastIndex).trim();
+              let vals;
+              if (rest.startsWith('(')) {
+                vals = extractParenBody(rest);
+              } else {
+                vals = '';
+              }
+              tbl.partition.partitions.push({ name: pName, values: splitListValues(vals || '') });
+            }
+          }
+        }
       }
     }
 
-    const parts = splitColumnDefs(ctm[2]);
+    const parts = splitColumnDefs(bodyContent);
     for (const part of parts) {
       const p = part.trim();
       if (!p) continue;
@@ -659,8 +944,11 @@ function parseMySQLDDL(sql) {
       // CONSTRAINT ... PRIMARY KEY
       const cpk = p.match(/^CONSTRAINT\s+[`"']?(\w+)[`"']?\s+PRIMARY\s+KEY\s*\(([^)]+)\)/i);
       if (cpk) { tbl.primaryKey = { name: cpk[1], columns: cpk[2].split(',').map(c=>c.trim().replace(/[`"']/g,'')) }; continue; }
-      // Skip FOREIGN KEY, CHECK etc
-      if (/^(CONSTRAINT|FOREIGN|CHECK)\b/i.test(p)) continue;
+      // FOREIGN KEY constraint
+      const fkm1 = p.match(/^(?:CONSTRAINT\s+[`"']?(\w+)[`"']?\s+)?FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+[`"']?(\w+)[`"']?\s*\(([^)]+)\)(?:\s+ON\s+DELETE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?(?:\s+ON\s+UPDATE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?/i);
+      if (fkm1) { tbl.foreignKeys.push({ name: fkm1[1]||'FK_'+tbl.name, columns: fkm1[2].split(',').map(c=>c.trim().replace(/[`"']/g,'')), refTable: fkm1[3], refColumns: fkm1[4].split(',').map(c=>c.trim().replace(/[`"']/g,'')), onDelete: fkm1[5]||null, onUpdate: fkm1[6]||null }); continue; }
+      // Skip CHECK
+      if (/^(CHECK)\b/i.test(p)) continue;
       // Column
       const col = parseMySQLColumn(p);
       if (col) tbl.columns.push(col);
@@ -722,30 +1010,74 @@ function parsePostgreSQLDDL(sql) {
     const s = stmt.trim();
     // Skip PARTITION OF sub-tables (we'll handle them separately)
     if (/^CREATE\s+TABLE\s+\w+\s+PARTITION\s+OF\b/i.test(s)) {
-      // Find parent table and add partition info
+      // RANGE: FOR VALUES FROM (...) TO (...)
       const pm = s.match(/^CREATE\s+TABLE\s+[`"']?(\w+)[`"']?\s+PARTITION\s+OF\s+[`"']?(\w+)[`"']?\s+FOR\s+VALUES\s+FROM\s+\('([^']*)'\)\s+TO\s+\('([^']*)'\)/i);
       if (pm) {
         const parent = tables.find(t => t.name.toLowerCase() === pm[2].toLowerCase());
         if (parent && parent.partition) {
           parent.partition.partitions.push({ name: pm[1], valueFrom: pm[3], valueTo: pm[4] });
         }
+        continue;
+      }
+      // LIST: FOR VALUES IN (...)
+      const lm = s.match(/^CREATE\s+TABLE\s+[`"']?(\w+)[`"']?\s+PARTITION\s+OF\s+[`"']?(\w+)[`"']?\s+FOR\s+VALUES\s+IN\s*\(([^)]+)\)/i);
+      if (lm) {
+        const parent = tables.find(t => t.name.toLowerCase() === lm[2].toLowerCase());
+        if (parent && parent.partition) {
+          parent.partition.partitions.push({ name: lm[1], values: splitListValues(lm[3]) });
+        }
+        continue;
+      }
+      // HASH: FOR VALUES WITH (modulus M, remainder R)
+      const hm = s.match(/^CREATE\s+TABLE\s+[`"']?(\w+)[`"']?\s+PARTITION\s+OF\s+[`"']?(\w+)[`"']?\s+FOR\s+VALUES\s+WITH\s*\(\s*modulus\s+(\d+)\s*,\s*remainder\s+(\d+)\s*\)/i);
+      if (hm) {
+        const parent = tables.find(t => t.name.toLowerCase() === hm[2].toLowerCase());
+        if (parent && parent.partition) {
+          parent.partition.partitions.push({ name: hm[1], modulus: parseInt(hm[3]), remainder: parseInt(hm[4]) });
+          if (!parent.partition.hashCount || parseInt(hm[3]) > parent.partition.hashCount) {
+            parent.partition.hashCount = parseInt(hm[3]);
+          }
+        }
+        continue;
+      }
+      // DEFAULT partition
+      const dm = s.match(/^CREATE\s+TABLE\s+[`"']?(\w+)[`"']?\s+PARTITION\s+OF\s+[`"']?(\w+)[`"']?\s+DEFAULT/i);
+      if (dm) {
+        const parent = tables.find(t => t.name.toLowerCase() === dm[2].toLowerCase());
+        if (parent && parent.partition) {
+          parent.partition.partitions.push({ name: dm[1], isDefault: true });
+        }
+        continue;
       }
       continue;
     }
 
-    const ctm = s.match(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[\w"]+\.)?["']?(\w+)["']?\s*\(([\s\S]+)\)\s*([\s\S]*?)$/i);
-    if (!ctm) continue;
+    const ctHeader = s.match(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[\w"]+\.)?["']?(\w+)["']?\s*\(/i);
+    if (!ctHeader) continue;
     const tbl = makeTable();
-    tbl.name = ctm[1];
-    const afterParen = ctm[3] || '';
+    tbl.name = ctHeader[1];
+    // Balanced-paren extraction for column body
+    const openIdx = s.indexOf('(', ctHeader[0].length - 1);
+    let _depth = 0, _inQ = false, _bodyEnd = -1;
+    for (let i = openIdx; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === "'" && !_inQ) { _inQ = true; continue; }
+      if (ch === "'" && _inQ) { if (i+1 < s.length && s[i+1] === "'") { i++; } else { _inQ = false; } continue; }
+      if (_inQ) continue;
+      if (ch === '(') _depth++;
+      if (ch === ')') { _depth--; if (_depth === 0) { _bodyEnd = i; break; } }
+    }
+    if (_bodyEnd === -1) continue;
+    const pgBody = s.slice(openIdx + 1, _bodyEnd);
+    const afterParen = s.slice(_bodyEnd + 1).trim();
 
     // Partition clause
     const partM = afterParen.match(/PARTITION\s+BY\s+(RANGE|LIST|HASH)\s*\(([^)]+)\)/i);
     if (partM) {
-      tbl.partition = { type: partM[1].toUpperCase(), columns: partM[2].split(',').map(c=>c.trim().replace(/["']/g,'')), partitions: [] };
+      tbl.partition = { type: partM[1].toUpperCase(), columns: partM[2].split(',').map(c=>c.trim().replace(/["']/g,'')), partitions: [], hashCount: null };
     }
 
-    const parts = splitColumnDefs(ctm[2]);
+    const parts = splitColumnDefs(pgBody);
     for (const part of parts) {
       const p = part.trim();
       if (!p) continue;
@@ -755,7 +1087,11 @@ function parsePostgreSQLDDL(sql) {
       if (pkm2) { tbl.primaryKey = { name: 'pk_'+tbl.name, columns: pkm2[1].split(',').map(c=>c.trim().replace(/["']/g,'')) }; continue; }
       const uqm = p.match(/^(?:CONSTRAINT\s+["']?(\w+)["']?\s+)?UNIQUE\s*\(([^)]+)\)/i);
       if (uqm) { tbl.uniqueKeys.push({ name: uqm[1]||'uq_'+tbl.name, columns: uqm[2].split(',').map(c=>c.trim().replace(/["']/g,'')) }); continue; }
-      if (/^(CONSTRAINT|FOREIGN|CHECK|EXCLUDE)\b/i.test(p)) continue;
+      // FOREIGN KEY constraint
+      const fkm2 = p.match(/^(?:CONSTRAINT\s+["']?(\w+)["']?\s+)?FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+(?:[\w"]+\.)?["']?(\w+)["']?\s*\(([^)]+)\)(?:\s+ON\s+DELETE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?(?:\s+ON\s+UPDATE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?/i);
+      if (fkm2) { tbl.foreignKeys.push({ name: fkm2[1]||'fk_'+tbl.name, columns: fkm2[2].split(',').map(c=>c.trim().replace(/["']/g,'')), refTable: fkm2[3], refColumns: fkm2[4].split(',').map(c=>c.trim().replace(/["']/g,'')), onDelete: fkm2[5]||null, onUpdate: fkm2[6]||null }); continue; }
+      // Skip CHECK, EXCLUDE
+      if (/^(CHECK|EXCLUDE)\b/i.test(p)) continue;
       const col = parsePGColumn(p);
       if (col) tbl.columns.push(col);
     }
@@ -781,6 +1117,15 @@ function parsePostgreSQLDDL(sql) {
     const cols = im[4].split(',').map(c=>c.trim().replace(/["']/g,''));
     if (im[1]) tbl.uniqueKeys.push({ name: im[2], columns: cols });
     else tbl.indexes.push({ name: im[2], columns: cols });
+  }
+
+  // ALTER TABLE ADD FOREIGN KEY
+  for (const stmt of stmts) {
+    const s = stmt.trim();
+    const fm = s.match(/^ALTER\s+TABLE\s+(?:[\w"]+\.)?["']?(\w+)["']?\s+ADD\s+(?:CONSTRAINT\s+["']?(\w+)["']?\s+)?FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+(?:[\w"]+\.)?["']?(\w+)["']?\s*\(([^)]+)\)(?:\s+ON\s+DELETE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?(?:\s+ON\s+UPDATE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?/i);
+    if (!fm) continue;
+    const tbl = tables.find(t => t.name.toLowerCase() === fm[1].toLowerCase());
+    if (tbl) tbl.foreignKeys.push({ name: fm[2]||'fk_'+tbl.name, columns: fm[3].split(',').map(c=>c.trim().replace(/["']/g,'')), refTable: fm[4], refColumns: fm[5].split(',').map(c=>c.trim().replace(/["']/g,'')), onDelete: fm[6]||null, onUpdate: fm[7]||null });
   }
 
   return tables;
@@ -1031,25 +1376,46 @@ function generateOracleDDL(tables, fromDb) {
     lines.push(colLines.join(',\n'));
     // Partition
     if (tbl.partition) {
+      const partType = tbl.partition.type;
       lines.push(')');
-      lines.push('PARTITION BY ' + tbl.partition.type + ' (' + tbl.partition.columns.map(c=>c.toUpperCase()).join(', ') + ') (');
-      const pLines = [];
-      for (const p of tbl.partition.partitions) {
-        let val = p.value || '';
-        if (p.valueFrom && p.valueTo) {
-          // PG style → Oracle style
-          val = "TO_DATE('" + p.valueTo + "', 'YYYY-MM-DD')";
-        } else if (/^TO_DAYS\(/i.test(val)) {
-          // MySQL TO_DAYS → Oracle TO_DATE
-          const dm = val.match(/TO_DAYS\s*\(\s*'([^']*)'\s*\)/i);
-          val = dm ? "TO_DATE('" + dm[1] + "', 'YYYY-MM-DD')" : val;
-        } else if (val === 'MAXVALUE' || val === '') {
-          val = 'MAXVALUE';
+      if (partType === 'HASH') {
+        const count = tbl.partition.hashCount || tbl.partition.partitions.length || 4;
+        lines.push('PARTITION BY HASH (' + tbl.partition.columns.map(c=>c.toUpperCase()).join(', ') + ') PARTITIONS ' + count + ';');
+      } else if (partType === 'LIST') {
+        lines.push('PARTITION BY LIST (' + tbl.partition.columns.map(c=>c.toUpperCase()).join(', ') + ') (');
+        const pLines = [];
+        for (const p of tbl.partition.partitions) {
+          const vals = p.values ? p.values.join(',') : (p.value || '');
+          pLines.push('    PARTITION ' + p.name.toUpperCase() + ' VALUES (' + vals + ')');
         }
-        pLines.push('    PARTITION ' + p.name.toUpperCase() + ' VALUES LESS THAN (' + val + ')');
+        lines.push(pLines.join(',\n'));
+        lines.push(');');
+      } else {
+        // RANGE
+        lines.push('PARTITION BY ' + partType + ' (' + tbl.partition.columns.map(c=>c.toUpperCase()).join(', ') + ') (');
+        const pLines = [];
+        for (const p of tbl.partition.partitions) {
+          if (p.isDefault) {
+            // Oracle doesn't have DEFAULT partition for RANGE; use MAXVALUE
+            pLines.push('    PARTITION ' + p.name.toUpperCase() + ' VALUES LESS THAN (MAXVALUE)');
+            continue;
+          }
+          let val = p.value || '';
+          if (p.valueFrom && p.valueTo) {
+            // PG style -> Oracle style
+            val = "TO_DATE('" + p.valueTo + "', 'YYYY-MM-DD')";
+          } else if (/^TO_DAYS\(/i.test(val)) {
+            // MySQL TO_DAYS -> Oracle TO_DATE
+            const dm = val.match(/TO_DAYS\s*\(\s*'([^']*)'\s*\)/i);
+            val = dm ? "TO_DATE('" + dm[1] + "', 'YYYY-MM-DD')" : val;
+          } else if (val.toUpperCase() === 'MAXVALUE' || val === '') {
+            val = 'MAXVALUE';
+          }
+          pLines.push('    PARTITION ' + p.name.toUpperCase() + ' VALUES LESS THAN (' + val + ')');
+        }
+        lines.push(pLines.join(',\n'));
+        lines.push(');');
       }
-      lines.push(pLines.join(',\n'));
-      lines.push(');');
     } else {
       lines.push(');');
     }
@@ -1074,6 +1440,14 @@ function generateOracleDDL(tables, fromDb) {
       lines.push('CREATE INDEX ' + idx.name.toUpperCase() + ' ON ' + tname + '(' + idx.columns.map(c=>c.toUpperCase()).join(', ') + ');');
     }
     if (tbl.uniqueKeys.length || tbl.indexes.length) lines.push('');
+    // Foreign keys
+    for (const fk of tbl.foreignKeys) {
+      let fkLine = 'ALTER TABLE ' + tname + ' ADD CONSTRAINT ' + fk.name.toUpperCase() + ' FOREIGN KEY (' + fk.columns.map(c=>c.toUpperCase()).join(', ') + ') REFERENCES ' + fk.refTable.toUpperCase() + '(' + fk.refColumns.map(c=>c.toUpperCase()).join(', ') + ')';
+      if (fk.onDelete) fkLine += ' ON DELETE ' + fk.onDelete.toUpperCase();
+      if (fk.onUpdate) fkLine += ' ON UPDATE ' + fk.onUpdate.toUpperCase();
+      lines.push(fkLine + ';');
+    }
+    if (tbl.foreignKeys.length) lines.push('');
     // Auto increment → sequence
     for (const col of tbl.columns) {
       if (col.autoIncrement) {
@@ -1121,15 +1495,35 @@ function generateMySQLDDL(tables, fromDb) {
     for (const idx of tbl.indexes) {
       colLines.push('    KEY `' + idx.name.toLowerCase() + '` (' + idx.columns.map(c=>'`'+c.toLowerCase()+'`').join(', ') + ')');
     }
+    // Foreign keys (inline)
+    for (const fk of tbl.foreignKeys) {
+      let fkLine = '    CONSTRAINT `' + fk.name.toLowerCase() + '` FOREIGN KEY (' + fk.columns.map(c=>'`'+c.toLowerCase()+'`').join(', ') + ') REFERENCES `' + fk.refTable.toLowerCase() + '`(' + fk.refColumns.map(c=>'`'+c.toLowerCase()+'`').join(', ') + ')';
+      if (fk.onDelete) fkLine += ' ON DELETE ' + fk.onDelete.toUpperCase();
+      if (fk.onUpdate) fkLine += ' ON UPDATE ' + fk.onUpdate.toUpperCase();
+      colLines.push(fkLine);
+    }
     lines.push(colLines.join(',\n'));
     let optLine = ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
     if (tbl.comment) optLine += "\n  COMMENT='" + tbl.comment.replace(/'/g, "''") + "'";
     // Partition
-    if (tbl.partition && tbl.partition.partitions.length) {
+    if (tbl.partition) {
       lines.push(optLine);
       const pType = tbl.partition.type;
       const pCols = tbl.partition.columns.map(c=>'`'+c.toLowerCase()+'`').join(', ');
-      if (pType === 'RANGE') {
+      if (pType === 'HASH') {
+        const count = tbl.partition.hashCount || tbl.partition.partitions.length || 4;
+        lines.push('  PARTITION BY HASH (' + pCols + ')');
+        lines.push('  PARTITIONS ' + count + ';');
+      } else if (pType === 'LIST') {
+        lines.push('  PARTITION BY LIST COLUMNS(' + pCols + ') (');
+        const pLines = [];
+        for (const p of tbl.partition.partitions) {
+          const vals = p.values ? p.values.join(',') : (p.value || '');
+          pLines.push('    PARTITION `' + p.name.toLowerCase() + '` VALUES IN (' + vals + ')');
+        }
+        lines.push(pLines.join(',\n'));
+        lines.push('  );');
+      } else if (pType === 'RANGE') {
         // Check if date column → use TO_DAYS
         const isDate = tbl.columns.some(c => tbl.partition.columns.some(pc => pc.toUpperCase() === c.name.toUpperCase()) && /DATE|DATETIME|TIMESTAMP/i.test(typeMap(c)));
         if (isDate) {
@@ -1139,6 +1533,10 @@ function generateMySQLDDL(tables, fromDb) {
         }
         const pLines = [];
         for (const p of tbl.partition.partitions) {
+          if (p.isDefault) {
+            pLines.push('    PARTITION `' + p.name.toLowerCase() + '` VALUES LESS THAN MAXVALUE');
+            continue;
+          }
           let val = p.value || '';
           if (p.valueFrom && p.valueTo) {
             // PG style
@@ -1156,15 +1554,7 @@ function generateMySQLDDL(tables, fromDb) {
           }
         }
         lines.push(pLines.join(',\n'));
-        lines.push(');');
-      } else if (pType === 'LIST') {
-        lines.push('  PARTITION BY LIST (' + pCols + ') (');
-        const pLines = tbl.partition.partitions.map(p => '    PARTITION `' + p.name.toLowerCase() + '` VALUES IN (' + p.value + ')');
-        lines.push(pLines.join(',\n'));
-        lines.push(');');
-      } else {
-        lines.push('  PARTITION BY HASH (' + pCols + ')');
-        lines.push('  PARTITIONS ' + (tbl.partition.partitions.length || 4) + ';');
+        lines.push('  );');
       }
     } else {
       lines.push(optLine + ';');
@@ -1212,37 +1602,78 @@ function generatePostgreSQLDDL(tables, fromDb) {
 
     // Partition
     if (tbl.partition) {
-      lines.push(') PARTITION BY ' + tbl.partition.type + ' (' + tbl.partition.columns.map(c=>c.toLowerCase()).join(', ') + ');');
+      const partType = tbl.partition.type;
+      lines.push(') PARTITION BY ' + partType + ' (' + tbl.partition.columns.map(c=>c.toLowerCase()).join(', ') + ');');
       lines.push('');
-      // Create partition sub-tables
-      for (const p of tbl.partition.partitions) {
-        let valFrom, valTo;
-        if (p.valueFrom && p.valueTo) {
-          valFrom = p.valueFrom; valTo = p.valueTo;
-        } else if (p.value) {
-          const v = p.value.trim();
-          if (v.toUpperCase() === 'MAXVALUE') continue; // PG doesn't have MAXVALUE in the same way, skip or use DEFAULT
+
+      if (partType === 'HASH') {
+        const count = tbl.partition.hashCount || tbl.partition.partitions.length || 4;
+        for (let i = 0; i < count; i++) {
+          const pName = tbl.partition.partitions[i] ? tbl.partition.partitions[i].name.toLowerCase() : tname + '_p' + i;
+          lines.push('CREATE TABLE ' + pName + ' PARTITION OF ' + tname);
+          lines.push('    FOR VALUES WITH (modulus ' + count + ', remainder ' + i + ');');
+        }
+        lines.push('');
+      } else if (partType === 'LIST') {
+        for (const p of tbl.partition.partitions) {
+          if (p.isDefault) {
+            lines.push('CREATE TABLE ' + tname + '_' + p.name.toLowerCase() + ' PARTITION OF ' + tname + ' DEFAULT;');
+            continue;
+          }
+          const vals = p.values ? p.values.join(',') : (p.value || '');
+          lines.push('CREATE TABLE ' + tname + '_' + p.name.toLowerCase() + ' PARTITION OF ' + tname);
+          lines.push('    FOR VALUES IN (' + vals + ');');
+        }
+        lines.push('');
+      } else {
+        // RANGE: build FROM/TO pairs from LESS THAN values
+        const rangePartitions = [];
+        for (const p of tbl.partition.partitions) {
+          if (p.isDefault) {
+            rangePartitions.push({ name: p.name, isDefault: true });
+            continue;
+          }
+          let valTo = null;
+          if (p.valueFrom && p.valueTo) {
+            rangePartitions.push({ name: p.name, from: p.valueFrom, to: p.valueTo });
+            continue;
+          }
+          const val = (p.value || '').trim();
+          if (val.toUpperCase() === 'MAXVALUE') {
+            rangePartitions.push({ name: p.name, isDefault: true });
+            continue;
+          }
           // Extract date from TO_DATE('...') or TO_DAYS('...')
-          const dm = v.match(/TO_DATE\s*\(\s*'([^']*)'/i) || v.match(/TO_DAYS\s*\(\s*'([^']*)'/i);
-          if (dm) {
-            valTo = dm[1];
-            // We don't have the FROM for the first partition easily, skip creating range
+          const dm = val.match(/TO_DATE\s*\(\s*'([^']*)'/i) || val.match(/TO_DAYS\s*\(\s*'([^']*)'/i);
+          if (dm) valTo = dm[1];
+          else valTo = val;
+          rangePartitions.push({ name: p.name, to: valTo });
+        }
+        // Convert LESS THAN values to FROM/TO pairs
+        let prevTo = null;
+        for (const rp of rangePartitions) {
+          if (rp.isDefault) {
+            lines.push('CREATE TABLE ' + tname + '_' + rp.name.toLowerCase() + ' PARTITION OF ' + tname + ' DEFAULT;');
+            continue;
+          }
+          if (rp.from && rp.to) {
+            lines.push('CREATE TABLE ' + tname + '_' + rp.name.toLowerCase() + ' PARTITION OF ' + tname);
+            lines.push("    FOR VALUES FROM ('" + rp.from + "') TO ('" + rp.to + "');");
+            prevTo = rp.to;
+          } else if (rp.to) {
+            if (prevTo) {
+              lines.push('CREATE TABLE ' + tname + '_' + rp.name.toLowerCase() + ' PARTITION OF ' + tname);
+              lines.push("    FOR VALUES FROM ('" + prevTo + "') TO ('" + rp.to + "');");
+            } else {
+              // First partition: use MINVALUE
+              lines.push('CREATE TABLE ' + tname + '_' + rp.name.toLowerCase() + ' PARTITION OF ' + tname);
+              lines.push("    FOR VALUES FROM (MINVALUE) TO ('" + rp.to + "');");
+            }
+            prevTo = rp.to;
           }
         }
-        if (valFrom && valTo) {
-          lines.push('CREATE TABLE ' + tname + '_' + p.name.toLowerCase() + ' PARTITION OF ' + tname);
-          lines.push("    FOR VALUES FROM ('" + valFrom + "') TO ('" + valTo + "');");
-        } else if (valTo) {
-          lines.push('-- PARTITION ' + p.name + ': VALUES LESS THAN ' + valTo);
-          lines.push('-- CREATE TABLE ' + tname + '_' + p.name.toLowerCase() + ' PARTITION OF ' + tname);
-          lines.push("--     FOR VALUES FROM ('<prev_date>') TO ('" + valTo + "');");
-        }
+        lines.push('');
       }
-      // For MAXVALUE partition, create a default partition
-      if (tbl.partition.partitions.some(p => (p.value||'').toUpperCase().includes('MAXVALUE'))) {
-        lines.push('CREATE TABLE ' + tname + '_default PARTITION OF ' + tname + ' DEFAULT;');
-      }
-      lines.push('');
     } else {
       lines.push(');');
       lines.push('');
@@ -1268,6 +1699,14 @@ function generatePostgreSQLDDL(tables, fromDb) {
       lines.push('CREATE INDEX ' + idx.name.toLowerCase() + ' ON ' + tname + '(' + idx.columns.map(c=>c.toLowerCase()).join(', ') + ');');
     }
     if (tbl.uniqueKeys.length || tbl.indexes.length) lines.push('');
+    // Foreign keys
+    for (const fk of tbl.foreignKeys) {
+      let fkLine = 'ALTER TABLE ' + tname + ' ADD CONSTRAINT ' + fk.name.toLowerCase() + ' FOREIGN KEY (' + fk.columns.map(c=>c.toLowerCase()).join(', ') + ') REFERENCES ' + fk.refTable.toLowerCase() + '(' + fk.refColumns.map(c=>c.toLowerCase()).join(', ') + ')';
+      if (fk.onDelete) fkLine += ' ON DELETE ' + fk.onDelete.toUpperCase();
+      if (fk.onUpdate) fkLine += ' ON UPDATE ' + fk.onUpdate.toUpperCase();
+      lines.push(fkLine + ';');
+    }
+    if (tbl.foreignKeys.length) lines.push('');
   }
   return lines.join('\n').trim();
 }
@@ -1318,6 +1757,7 @@ const app = createApp({
     const inputDdl = ref(SAMPLES.oracle);
     const outputDdl = ref('');
     const statusText = ref('');
+    const fileInput = ref(null);
 
     const modes = [
       { key: 'oracle', label: 'Oracle' },
@@ -1384,6 +1824,24 @@ const app = createApp({
       statusText.value = '已保存为 ' + fileName;
     }
 
+    function uploadFile() {
+      if (fileInput.value) { fileInput.value.value = ''; fileInput.value.click(); }
+    }
+
+    function handleFileUpload(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) { statusText.value = '文件过大（最大5MB）'; return; }
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        inputDdl.value = ev.target.result;
+        outputDdl.value = '';
+        statusText.value = '已加载文件: ' + file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+      };
+      reader.onerror = function() { statusText.value = '文件读取失败'; };
+      reader.readAsText(file, 'UTF-8');
+    }
+
     // Auto-load sample when sourceDb changes
     const showScrollTop = ref(false);
     function scrollToTop() { window.scrollTo({ top: 0, behavior: 'smooth' }); }
@@ -1398,9 +1856,10 @@ const app = createApp({
     });
 
     return {
-      sourceDb, targetDb, inputDdl, outputDdl, statusText,
+      sourceDb, targetDb, inputDdl, outputDdl, statusText, fileInput,
       modes, sourceLabel, targetLabel, inputLineCount, outputMeta,
       swapDbs, loadSample, clearAll, convert, copyOutput, saveOutput,
+      uploadFile, handleFileUpload,
       showScrollTop, scrollToTop
     };
   }
