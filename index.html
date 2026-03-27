@@ -115,7 +115,7 @@ textarea::placeholder{color:var(--text-muted)}
 .ref-table td:nth-child(3){color:var(--blue)}
 .ref-table tr:last-child td{border-bottom:none}
 .ref-note{font-size:11px;color:var(--text-muted);line-height:1.6;margin-top:8px;padding:8px 10px;background:rgba(255,255,255,.02);border-radius:var(--radius-sm);border-left:2px solid rgba(199,70,52,.3)}
-.ref-code{font-family:var(--font-code);font-size:11.5px;color:var(--text-muted);white-space:pre-wrap;line-height:1.65;padding:10px 12px;background:rgba(15,15,26,.6);border-radius:var(--radius-sm);border:1px solid var(--border);margin-top:6px;overflow-x:auto}
+.ref-code{font-family:var(--font-code);font-size:11.5px;color:var(--text-muted);white-space:pre;line-height:1.7;padding:14px 16px;background:rgba(10,10,20,.7);border-radius:var(--radius-sm);border:1px solid var(--border);margin-top:6px;overflow-x:auto;max-height:400px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.12) transparent}
 /* Scroll-to-top */
 .scroll-top{position:fixed;bottom:24px;right:24px;z-index:100;width:40px;height:40px;border-radius:50%;border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .3s;box-shadow:0 2px 12px rgba(0,0,0,.3);opacity:0;pointer-events:none;transform:translateY(10px)}
 .scroll-top.visible{opacity:1;pointer-events:auto;transform:translateY(0)}
@@ -169,11 +169,11 @@ textarea::placeholder{color:var(--text-muted)}
           DDL&#35821;&#21477;
         </div>
         <div class="nav-item" :class="{active: activePage==='func'}" @click="activePage='func'">
-          <span class="nav-icon" style="font-style:italic">f(x)</span>
+          <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3C3 2 4 1 5.5 1C7 1 8 2 8 3C8 5 5 5 5 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 8h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 8c0 3 3 3 3 5c0 1-1 2-2.5 2S3 14 3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="5" r="1" fill="currentColor"/><path d="M10 9l2-2 2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
           &#20989;&#25968;
         </div>
         <div class="nav-item" :class="{active: activePage==='proc'}" @click="activePage='proc'">
-          <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M8 4v4l2.5 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+          <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="10" y="2" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="10" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 6v2h4.5M12.5 6v2h-4.5M8 8v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
           &#23384;&#20648;&#36807;&#31243;
         </div>
       </nav>
@@ -2425,6 +2425,8 @@ function mapParamType(typeStr, fromDb, toDb) {
       t = t.replace(/\bDATETIME\s*\(\s*\d+\s*\)/gi, 'TIMESTAMP');
       t = t.replace(/\bDATETIME\b/gi, 'DATE');
       t = t.replace(/\bBOOLEAN\b/gi, 'NUMBER(1)');
+      t = t.replace(/\bVARCHAR\b(?!\s*\()/gi, 'VARCHAR2(4000)');
+      t = t.replace(/\bVARCHAR\s*\(([^)]+)\)/gi, 'VARCHAR2($1)');
     } else if (toDb === 'postgresql') {
       t = t.replace(/\bDECIMAL\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)/gi, 'NUMERIC($1,$2)');
       t = t.replace(/\bTINYINT\s*\(\s*1\s*\)/gi, 'BOOLEAN');
@@ -2489,19 +2491,117 @@ function _splitParamList(paramStr) {
 }
 
 function _convertConcatToFunction(line) {
-  if (!line.includes('||')) return line;
-  var parts = [], current = '', inSingle = false, i = 0;
-  while (i < line.length) {
-    if (line[i] === "'" && (i === 0 || line[i - 1] !== '\\')) {
-      inSingle = !inSingle; current += line[i]; i++;
-    } else if (!inSingle && line[i] === '|' && i + 1 < line.length && line[i + 1] === '|') {
-      parts.push(current.trim()); current = ''; i += 2;
-    } else { current += line[i]; i++; }
-  }
-  if (current.trim()) parts.push(current.trim());
-  if (parts.length <= 1) return line;
+  if (line.indexOf('||') < 0) return line;
+  // Skip comments
+  if (/^\s*--/.test(line)) return line;
   var leading = line.match(/^(\s*)/)[1];
-  return leading + 'CONCAT(' + parts.join(', ') + ')';
+  var trimmed = line.trim();
+
+  // Match assignment (:= expr;), SET var = expr;, or RETURN expr;
+  var assignMatch = trimmed.match(/^(.+?:=\s*)(.*\|\|.*?)(;\s*$)/i);
+  var setMatch = !assignMatch && trimmed.match(/^(SET\s+\w+\s*=\s*)(.*\|\|.*?)(;\s*$)/i);
+  var returnMatch = !assignMatch && !setMatch && trimmed.match(/^(RETURN\s+)(.*\|\|.*?)(;\s*$)/i);
+  var selectMatch = !assignMatch && !setMatch && !returnMatch && trimmed.match(/^(SELECT\s+)(.*\|\|.*?)(;\s*$)/i);
+  var match = assignMatch || setMatch || returnMatch || selectMatch;
+
+  if (match) {
+    var prefix = match[1];
+    var expr = match[2];
+    var suffix = match[3];
+    var parts = _splitOnPipeOutsideStringsAndParens(expr);
+    if (parts.length > 1) {
+      return leading + prefix + 'CONCAT(' + parts.map(function(p) { return p.trim(); }).join(', ') + ')' + suffix;
+    }
+    return line;
+  }
+
+  // Fallback: try to convert the whole line if it has ||
+  var parts2 = _splitOnPipeOutsideStringsAndParens(trimmed);
+  if (parts2.length > 1) {
+    return leading + 'CONCAT(' + parts2.map(function(p) { return p.trim(); }).join(', ') + ')';
+  }
+  return line;
+}
+
+function _splitOnPipeOutsideStringsAndParens(expr) {
+  var parts = [], current = '', inSingle = false, depth = 0, i = 0;
+  while (i < expr.length) {
+    if (expr[i] === "'" && !inSingle) {
+      inSingle = true; current += expr[i]; i++;
+    } else if (expr[i] === "'" && inSingle) {
+      if (i + 1 < expr.length && expr[i + 1] === "'") {
+        current += "''"; i += 2;
+      } else {
+        inSingle = false; current += expr[i]; i++;
+      }
+    } else if (inSingle) {
+      current += expr[i]; i++;
+    } else if (expr[i] === '(') {
+      depth++; current += expr[i]; i++;
+    } else if (expr[i] === ')') {
+      depth--; current += expr[i]; i++;
+    } else if (!inSingle && depth === 0 && expr[i] === '|' && i + 1 < expr.length && expr[i + 1] === '|') {
+      parts.push(current); current = ''; i += 2;
+    } else {
+      current += expr[i]; i++;
+    }
+  }
+  if (current.trim()) parts.push(current);
+  return parts;
+}
+
+function _convertConcatToPipe(body) {
+  // Replace CONCAT(a, b, ...) with (a || b || ...) handling nested parens
+  var result = '', i = 0;
+  while (i < body.length) {
+    // Look for CONCAT( keyword
+    var concatMatch = body.substring(i).match(/^\bCONCAT\s*\(/i);
+    if (concatMatch) {
+      var start = i + concatMatch[0].length;
+      // Find matching closing paren
+      var depth = 1, j = start, inQ = false;
+      while (j < body.length && depth > 0) {
+        if (body[j] === "'" && !inQ) { inQ = true; }
+        else if (body[j] === "'" && inQ) {
+          if (j + 1 < body.length && body[j+1] === "'") { j++; } else { inQ = false; }
+        }
+        else if (!inQ) {
+          if (body[j] === '(') depth++;
+          else if (body[j] === ')') depth--;
+        }
+        if (depth > 0) j++;
+      }
+      var inner = body.substring(start, j);
+      // Split on commas at depth 0
+      var args = [], cur = '', d = 0, iq = false;
+      for (var k = 0; k < inner.length; k++) {
+        var ch = inner[k];
+        if (ch === "'" && !iq) { iq = true; cur += ch; }
+        else if (ch === "'" && iq) {
+          if (k + 1 < inner.length && inner[k+1] === "'") { cur += "''"; k++; }
+          else { iq = false; cur += ch; }
+        }
+        else if (iq) { cur += ch; }
+        else if (ch === '(') { d++; cur += ch; }
+        else if (ch === ')') { d--; cur += ch; }
+        else if (ch === ',' && d === 0) { args.push(cur.trim()); cur = ''; }
+        else { cur += ch; }
+      }
+      if (cur.trim()) args.push(cur.trim());
+      // Recursively convert any nested CONCAT in args
+      args = args.map(function(a) { return _convertConcatToPipe(a); });
+      if (args.length > 1) {
+        result += '(' + args.join(' || ') + ')';
+      } else {
+        result += args[0] || '';
+      }
+      i = j + 1;
+    } else {
+      result += body[i];
+      i++;
+    }
+  }
+  return result;
 }
 
 function transformBody(body, fromDb, toDb) {
@@ -2614,15 +2714,12 @@ function transformBody(body, fromDb, toDb) {
 
   // String concatenation: || vs CONCAT
   if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
-    var prev = '';
-    while (prev !== b) {
-      prev = b;
-      b = b.replace(/\bCONCAT\s*\(\s*([^,()]+(?:\([^()]*\)[^,()]*)*)\s*,\s*([^,()]+(?:\([^()]*\)[^,()]*)*)\s*\)/gi, '($1 || $2)');
-    }
+    // Convert CONCAT(a, b, c) to (a || b || c) handling nested parens
+    b = _convertConcatToPipe(b);
   } else if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
     var lines = b.split('\n');
     for (var li = 0; li < lines.length; li++) {
-      if (lines[li].includes('||') && !lines[li].match(/^\s*--/)) {
+      if (lines[li].indexOf('||') >= 0 && !/^\s*--/.test(lines[li])) {
         lines[li] = _convertConcatToFunction(lines[li]);
       }
     }
@@ -2657,31 +2754,40 @@ function transformBody(body, fromDb, toDb) {
   }
 
   // EXCEPTION handling
-  if (fromDb === 'oracle') {
+  if (fromDb === 'oracle' || fromDb === 'postgresql') {
     if (toDb === 'mysql') {
-      b = b.replace(/\bEXCEPTION\s+WHEN\s+NO_DATA_FOUND\s+THEN\b/gi,
-        '-- [注意: Oracle EXCEPTION 已转换; MySQL 请使用 DECLARE HANDLER]\n  -- DECLARE CONTINUE HANDLER FOR NOT FOUND');
-      b = b.replace(/\bEXCEPTION\s+WHEN\s+OTHERS\s+THEN\b/gi,
-        '-- [注意: Oracle EXCEPTION 已转换]\n  -- DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN\n  --');
+      // Extract EXCEPTION block and comment it out entirely
+      b = b.replace(/\bEXCEPTION\b([\s\S]*?)$/i, function(match, exBlock) {
+        var lines = exBlock.split('\n');
+        var commented = lines.map(function(l) {
+          var trimmed = l.trim();
+          if (!trimmed) return '';
+          if (/^\s*--/.test(l)) return l;
+          return '  -- ' + trimmed;
+        }).filter(function(l) { return l !== '' || true; }).join('\n');
+        return '-- [注意: ' + (fromDb === 'oracle' ? 'Oracle' : 'PostgreSQL') + ' EXCEPTION 块无法直接转换为 MySQL，请手动改写为 DECLARE HANDLER]\n' + commented;
+      });
     }
   } else if (fromDb === 'mysql') {
     if (toDb === 'oracle') {
-      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+SQLEXCEPTION\b/gi,
+      // Remove entire DECLARE HANDLER ... BEGIN ... END; block
+      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+SQLEXCEPTION\s*\n?\s*BEGIN[\s\S]*?END\s*;/gi,
         '-- [注意: MySQL HANDLER -> Oracle 请使用 EXCEPTION WHEN OTHERS THEN]');
-      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+NOT\s+FOUND\b/gi,
+      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+SQLEXCEPTION\b[^\n]*/gi,
+        '-- [注意: MySQL HANDLER -> Oracle 请使用 EXCEPTION WHEN OTHERS THEN]');
+      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+NOT\s+FOUND\s*\n?\s*BEGIN[\s\S]*?END\s*;/gi,
+        '-- [注意: MySQL HANDLER -> Oracle 请使用 EXCEPTION WHEN NO_DATA_FOUND THEN]');
+      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+NOT\s+FOUND\b[^\n]*/gi,
         '-- [注意: MySQL HANDLER -> Oracle 请使用 EXCEPTION WHEN NO_DATA_FOUND THEN]');
     } else if (toDb === 'postgresql') {
-      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+SQLEXCEPTION\b/gi,
+      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+SQLEXCEPTION\s*\n?\s*BEGIN[\s\S]*?END\s*;/gi,
         '-- [注意: MySQL HANDLER -> PG 请使用 EXCEPTION WHEN OTHERS THEN]');
-      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+NOT\s+FOUND\b/gi,
+      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+SQLEXCEPTION\b[^\n]*/gi,
+        '-- [注意: MySQL HANDLER -> PG 请使用 EXCEPTION WHEN OTHERS THEN]');
+      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+NOT\s+FOUND\s*\n?\s*BEGIN[\s\S]*?END\s*;/gi,
         '-- [注意: MySQL HANDLER -> PG 请使用 EXCEPTION WHEN NO_DATA_FOUND THEN]');
-    }
-  } else if (fromDb === 'postgresql') {
-    if (toDb === 'mysql') {
-      b = b.replace(/\bEXCEPTION\s+WHEN\s+NO_DATA_FOUND\s+THEN\b/gi,
-        '-- [注意: PG EXCEPTION -> MySQL 请使用 DECLARE HANDLER]');
-      b = b.replace(/\bEXCEPTION\s+WHEN\s+OTHERS\s+THEN\b/gi,
-        '-- [注意: PG EXCEPTION -> MySQL 请使用 DECLARE EXIT HANDLER FOR SQLEXCEPTION]');
+      b = b.replace(/\bDECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+FOR\s+NOT\s+FOUND\b[^\n]*/gi,
+        '-- [注意: MySQL HANDLER -> PG 请使用 EXCEPTION WHEN NO_DATA_FOUND THEN]');
     }
   }
 
@@ -2730,12 +2836,22 @@ function _parseMySQLParam(paramStr) {
 function _parsePGParam(paramStr) {
   var s = paramStr.trim();
   if (!s) return null;
+  // PG format can be: direction name type  OR  name direction type  OR  name type
+  // Try direction-first: IN/OUT/INOUT name type
+  var mDir = s.match(/^(IN\s*OUT|INOUT|IN|OUT)\s+(\w+)\s+(.+?)(?:\s+DEFAULT\s+(.+))?$/i);
+  if (mDir) {
+    var dir = mDir[1].toUpperCase().replace(/\s+/g, ' ');
+    if (dir === 'INOUT') dir = 'IN OUT';
+    return { name: mDir[2], direction: dir, type: mDir[3].trim(), defaultVal: mDir[4] || null };
+  }
+  // Try name-first: name IN/OUT type
   var m = s.match(/^(\w+)\s+(IN\s*OUT|INOUT|IN|OUT)\s+(.+?)(?:\s+DEFAULT\s+(.+))?$/i);
   if (m) {
-    var dir = m[2].toUpperCase().replace(/\s+/g, ' ');
-    if (dir === 'INOUT') dir = 'IN OUT';
-    return { name: m[1], direction: dir, type: m[3].trim(), defaultVal: m[4] || null };
+    var dir2 = m[2].toUpperCase().replace(/\s+/g, ' ');
+    if (dir2 === 'INOUT') dir2 = 'IN OUT';
+    return { name: m[1], direction: dir2, type: m[3].trim(), defaultVal: m[4] || null };
   }
+  // No direction: name type (OUT keyword as name is unlikely)
   var m2 = s.match(/^(\w+)\s+(.+?)(?:\s+DEFAULT\s+(.+))?$/i);
   if (!m2) return null;
   return { name: m2[1], direction: 'IN', type: m2[2].trim(), defaultVal: m2[3] || null };
@@ -2765,7 +2881,7 @@ function convertFunction(input, sourceDb, targetDb) {
   if (!input || !input.trim()) return '-- 请在左侧输入区粘贴源函数定义';
   if (sourceDb === targetDb) return '-- 源库与目标库相同 (' + DB_LABELS[sourceDb] + ')，无需翻译\n\n' + input.trim();
 
-  var blocks = input.split(/(?=\bCREATE\b)/i).filter(function(b) { return b.trim().length > 0; });
+  var blocks = input.split(/\n(?=\s*CREATE\b)/i).filter(function(b) { return /\bCREATE\b/i.test(b); });
   var results = [];
   var errCount = 0;
 
@@ -2813,11 +2929,38 @@ function _convertSingleFunction(input, sourceDb, targetDb) {
 
 function _parseOracleFunction(input) {
   var src = input.replace(/\n\s*\/\s*$/, '').trim();
-  var headerRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(\w+)\s*\(([^)]*)\)\s*RETURN\s+(\S+(?:\s*\([^)]*\))?)\s+(IS|AS)\b/i;
-  var m = src.match(headerRe);
-  if (!m) throw new Error('无法解析Oracle函数头');
-  var name = m[1], paramStr = m[2], returnType = m[3];
-  var afterHeader = src.substring(m.index + m[0].length);
+  // Strip trailing comments after the function body
+  src = src.replace(/(\bEND\b\s*\w*\s*;?\s*(?:\/\s*)?)\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
+  // Find CREATE FUNCTION name( handling nested parens in params
+  var prefixRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(\w+)\s*\(/i;
+  var pm = src.match(prefixRe);
+  var name, paramStr, afterParams;
+  if (pm) {
+    name = pm[1];
+    var paramStart = pm.index + pm[0].length;
+    var depth = 1, pi = paramStart;
+    while (pi < src.length && depth > 0) {
+      if (src[pi] === '(') depth++;
+      else if (src[pi] === ')') depth--;
+      if (depth > 0) pi++;
+    }
+    paramStr = src.substring(paramStart, pi);
+    afterParams = src.substring(pi + 1).trim();
+  } else {
+    // Try parameterless function: CREATE [OR REPLACE] FUNCTION name RETURN ...
+    var noParen = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(\w+)\s+/i;
+    var npm = src.match(noParen);
+    if (!npm) throw new Error('无法解析Oracle函数头');
+    name = npm[1];
+    paramStr = '';
+    afterParams = src.substring(npm.index + npm[0].length).trim();
+  }
+  // Match RETURN type IS|AS
+  var returnRe = /^RETURN\s+(\S+(?:\s*\([^)]*\))?)\s+(IS|AS)\b/i;
+  var rm = afterParams.match(returnRe);
+  if (!rm) throw new Error('无法解析Oracle函数头 RETURN');
+  var returnType = rm[1];
+  var afterHeader = afterParams.substring(rm[0].length);
   var beginIdx = afterHeader.search(/\bBEGIN\b/i);
   var declBlock = '', bodyPart = afterHeader;
   if (beginIdx >= 0) { declBlock = afterHeader.substring(0, beginIdx).trim(); bodyPart = afterHeader.substring(beginIdx); }
@@ -2829,14 +2972,32 @@ function _parseOracleFunction(input) {
 }
 
 function _parseMySQLFunction(input) {
-  var src = input.replace(/^\s*DELIMITER\s+\S+\s*$/gm, '').trim();
-  src = src.replace(/\$\$\s*$/g, '').trim();
-  var headerRe = /CREATE\s+(?:DEFINER\s*=\s*\S+\s+)?FUNCTION\s+(\w+)\s*\(([^)]*)\)\s*RETURNS\s+(\S+(?:\s*\([^)]*\))?)\s*(?:DETERMINISTIC\s*)?(?:READS\s+SQL\s+DATA\s*)?/i;
-  var m = src.match(headerRe);
-  if (!m) throw new Error('无法解析MySQL函数头');
-  var name = m[1], paramStr = m[2], returnType = m[3];
-  var afterHeader = src.substring(m.index + m[0].length);
-  var bodyMatch = afterHeader.match(/\bBEGIN\b([\s\S]*)\bEND\b\s*;?\s*$/i);
+  var src = input.replace(/^\s*DELIMITER\s+\S+\s*$/gim, '').trim();
+  src = src.replace(/\$\$/g, '').trim();
+  // Strip trailing comments that come after END
+  src = src.replace(/(\bEND\b\s*\w*\s*;?)\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
+  // Find CREATE FUNCTION name( and extract params handling nested parens
+  var prefixRe = /CREATE\s+(?:DEFINER\s*=\s*\S+\s+)?FUNCTION\s+(\w+)\s*\(/i;
+  var pm = src.match(prefixRe);
+  if (!pm) throw new Error('无法解析MySQL函数头');
+  var name = pm[1];
+  var paramStart = pm.index + pm[0].length;
+  // Find matching closing paren
+  var depth = 1, pi = paramStart;
+  while (pi < src.length && depth > 0) {
+    if (src[pi] === '(') depth++;
+    else if (src[pi] === ')') depth--;
+    if (depth > 0) pi++;
+  }
+  var paramStr = src.substring(paramStart, pi);
+  var afterParams = src.substring(pi + 1).trim();
+  // Match RETURNS type and optional keywords
+  var returnsRe = /^RETURNS\s+(\S+(?:\s*\([^)]*\))?)\s*(?:DETERMINISTIC\s*)?(?:READS\s+SQL\s+DATA\s*)?(?:CONTAINS\s+SQL\s*)?(?:NO\s+SQL\s*)?(?:MODIFIES\s+SQL\s+DATA\s*)?/i;
+  var rm = afterParams.match(returnsRe);
+  if (!rm) throw new Error('无法解析MySQL函数头 RETURNS');
+  var returnType = rm[1];
+  var afterHeader = afterParams.substring(rm[0].length);
+  var bodyMatch = afterHeader.match(/\bBEGIN\b([\s\S]*)\bEND\b\s*\w*\s*;?\s*$/i);
   if (!bodyMatch) throw new Error('无法找到MySQL函数体 BEGIN...END');
   var bodyContent = bodyMatch[1];
   var vars = [], bodyLines = bodyContent.split('\n'), nonDeclLines = [];
@@ -2852,11 +3013,33 @@ function _parseMySQLFunction(input) {
 
 function _parsePGFunction(input) {
   var src = input.trim();
-  var headerRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(\w+)\s*\(([^)]*)\)\s*RETURNS\s+(\S+(?:\s*\([^)]*\))?)\s*(?:AS\s*\$\$|LANGUAGE\s+\w+\s*AS\s*\$\$)/i;
-  var m = src.match(headerRe);
-  if (!m) throw new Error('无法解析PostgreSQL函数头');
-  var name = m[1], paramStr = m[2], returnType = m[3];
-  var afterHeader = src.substring(m.index + m[0].length);
+  // Strip trailing comments
+  src = src.replace(/(\$\$\s*;?)\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
+  // Find CREATE FUNCTION name( with nested paren handling
+  var prefixRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(\w+)\s*\(/i;
+  var pm = src.match(prefixRe);
+  if (!pm) throw new Error('无法解析PostgreSQL函数头');
+  var name = pm[1];
+  var paramStart = pm.index + pm[0].length;
+  var depth = 1, pi = paramStart;
+  while (pi < src.length && depth > 0) {
+    if (src[pi] === '(') depth++;
+    else if (src[pi] === ')') depth--;
+    if (depth > 0) pi++;
+  }
+  var paramStr = src.substring(paramStart, pi);
+  var afterParams = src.substring(pi + 1).trim();
+  // Match RETURNS type ... AS $$  or  RETURNS type LANGUAGE ... AS $$
+  var returnsRe = /^RETURNS\s+(\S+(?:\s*\([^)]*\))?)\s*(?:LANGUAGE\s+\w+\s*)?AS\s*\$\$/i;
+  var rm = afterParams.match(returnsRe);
+  if (!rm) {
+    // Try: RETURNS type AS $$ ... LANGUAGE
+    returnsRe = /^RETURNS\s+(\S+(?:\s*\([^)]*\))?)\s*AS\s*\$\$/i;
+    rm = afterParams.match(returnsRe);
+    if (!rm) throw new Error('无法解析PostgreSQL函数头 RETURNS');
+  }
+  var returnType = rm[1];
+  var afterHeader = afterParams.substring(rm[0].length);
   var inner = afterHeader.replace(/\$\$\s*;?\s*$/g, '').replace(/\bLANGUAGE\s+\w+\s*;?\s*$/gi, '').trim();
   inner = inner.replace(/\$\$\s*LANGUAGE\s+\w+\s*;?\s*$/gi, '').trim();
   var vars = [];
@@ -2895,9 +3078,13 @@ function _genOracleFunction(name, params, returnType, vars, body) {
     if (v.defaultVal) out += ' := ' + v.defaultVal;
     out += ';\n';
   }
-  out += 'BEGIN' + body;
-  if (!/\bEND\s*;?\s*$/i.test(out.trim())) out += '\nEND;\n';
-  if (!out.trimEnd().match(/END\s*;\s*$/i)) out = out.trimEnd() + ';\n';
+  var cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '');
+  // Remove any leading BEGIN if body already has it
+  cleanBody = cleanBody.replace(/^\s*BEGIN\b/i, '');
+  out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
+  // Ensure proper END
+  if (!/\bEND\b/i.test(out.split('BEGIN').pop())) out += 'END;\n';
+  else out = out.replace(/\bEND\b\s*\w*\s*;?\s*$/i, 'END;\n');
   out += '/';
   return out;
 }
@@ -2919,13 +3106,15 @@ function _genMySQLFunction(name, params, returnType, vars, body) {
     if (v.defaultVal) out += ' DEFAULT ' + v.defaultVal;
     out += ';\n';
   }
-  out += body;
-  // Ensure proper END
-  var afterBegin = out.substring(out.lastIndexOf('BEGIN'));
-  if (!/\bEND\b/i.test(afterBegin.split('BEGIN').pop())) out += '\nEND';
-  out = out.replace(/\bEND\s*;?\s*$/, 'END$$');
-  if (!out.trimEnd().endsWith('$$')) out = out.trimEnd() + '$$';
-  out += '\nDELIMITER ;';
+  // Clean body: remove leading/trailing whitespace and any extra BEGIN
+  var cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '').replace(/^\s*BEGIN\b/i, '');
+  out += cleanBody.replace(/^\n+/,'') + '\n';
+  // Ensure it ends with END$$
+  out = out.replace(/\s+$/, '\n');
+  // Remove any trailing END with name, normalize to just END
+  out = out.replace(/\bEND\b\s*\w*\s*;\s*(?:\/\s*)?$/i, '');
+  out += 'END$$\n';
+  out += 'DELIMITER ;';
   return out;
 }
 
@@ -2949,9 +3138,12 @@ function _genPGFunction(name, params, returnType, vars, body) {
       out += ';\n';
     }
   }
-  out += 'BEGIN' + body;
-  if (!/\bEND\s*;?\s*$/i.test(out.trim())) out += '\nEND;\n';
-  out = out.replace(/END\s*;?\s*$/, 'END;\n$$;');
+  var cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '');
+  cleanBody = cleanBody.replace(/^\s*BEGIN\b/i, '');
+  out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
+  if (!/\bEND\b/i.test(out.split('BEGIN').pop())) out += 'END;\n';
+  else out = out.replace(/\bEND\b\s*\w*\s*;?\s*$/i, 'END;\n');
+  out = out.replace(/\s+$/, '') + '\n$$;';
   return out;
 }
 
@@ -2961,7 +3153,7 @@ function convertProcedure(input, sourceDb, targetDb) {
   if (!input || !input.trim()) return '-- 请在左侧输入区粘贴源存储过程定义';
   if (sourceDb === targetDb) return '-- 源库与目标库相同 (' + DB_LABELS[sourceDb] + ')，无需翻译\n\n' + input.trim();
 
-  var blocks = input.split(/(?=\bCREATE\b)/i).filter(function(b) { return b.trim().length > 0; });
+  var blocks = input.split(/\n(?=\s*CREATE\b)/i).filter(function(b) { return /\bCREATE\b/i.test(b); });
   var results = [];
   var errCount = 0;
 
@@ -3008,15 +3200,17 @@ function _convertSingleProcedure(input, sourceDb, targetDb) {
 
 function _parseOracleProcedure(input) {
   var src = input.replace(/\n\s*\/\s*$/, '').trim();
-  var headerRe = /CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(\w+)\s*\(([^)]*)\)\s*(IS|AS)\b/i;
-  var m = src.match(headerRe);
-  if (!m) {
+  src = src.replace(/(\bEND\b\s*\w*\s*;?\s*(?:\/\s*)?)\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
+  // Try to find CREATE PROCEDURE name(
+  var prefixRe = /CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(\w+)\s*\(/i;
+  var pm = src.match(prefixRe);
+  if (!pm) {
     // Try without params
     var headerRe2 = /CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(\w+)\s*(IS|AS)\b/i;
-    m = src.match(headerRe2);
-    if (!m) throw new Error('无法解析Oracle存储过程头');
-    var name = m[1];
-    var afterHeader = src.substring(m.index + m[0].length);
+    var m2 = src.match(headerRe2);
+    if (!m2) throw new Error('无法解析Oracle存储过程头');
+    var name = m2[1];
+    var afterHeader = src.substring(m2.index + m2[0].length);
     var beginIdx = afterHeader.search(/\bBEGIN\b/i);
     var declBlock = '', bodyPart = afterHeader;
     if (beginIdx >= 0) { declBlock = afterHeader.substring(0, beginIdx).trim(); bodyPart = afterHeader.substring(beginIdx); }
@@ -3025,8 +3219,21 @@ function _parseOracleProcedure(input) {
     var body = bodyMatch ? bodyMatch[1] : bodyPart;
     return { name: name, params: [], vars: vars, body: body };
   }
-  var name = m[1], paramStr = m[2];
-  var afterHeader = src.substring(m.index + m[0].length);
+  var name = pm[1];
+  var paramStart = pm.index + pm[0].length;
+  var depth = 1, pi = paramStart;
+  while (pi < src.length && depth > 0) {
+    if (src[pi] === '(') depth++;
+    else if (src[pi] === ')') depth--;
+    if (depth > 0) pi++;
+  }
+  var paramStr = src.substring(paramStart, pi);
+  var afterParams = src.substring(pi + 1).trim();
+  // Match IS|AS
+  var isAsRe = /^\s*(IS|AS)\b/i;
+  var iam = afterParams.match(isAsRe);
+  if (!iam) throw new Error('无法解析Oracle存储过程头 IS/AS');
+  var afterHeader = afterParams.substring(iam[0].length);
   var beginIdx = afterHeader.search(/\bBEGIN\b/i);
   var declBlock = '', bodyPart = afterHeader;
   if (beginIdx >= 0) { declBlock = afterHeader.substring(0, beginIdx).trim(); bodyPart = afterHeader.substring(beginIdx); }
@@ -3038,14 +3245,24 @@ function _parseOracleProcedure(input) {
 }
 
 function _parseMySQLProcedure(input) {
-  var src = input.replace(/^\s*DELIMITER\s+\S+\s*$/gm, '').trim();
-  src = src.replace(/\$\$\s*$/g, '').trim();
-  var headerRe = /CREATE\s+(?:DEFINER\s*=\s*\S+\s+)?PROCEDURE\s+(\w+)\s*\(([^)]*)\)/i;
-  var m = src.match(headerRe);
-  if (!m) throw new Error('无法解析MySQL存储过程头');
-  var name = m[1], paramStr = m[2];
-  var afterHeader = src.substring(m.index + m[0].length);
-  var bodyMatch = afterHeader.match(/\bBEGIN\b([\s\S]*)\bEND\b\s*;?\s*$/i);
+  var src = input.replace(/^\s*DELIMITER\s+\S+\s*$/gim, '').trim();
+  src = src.replace(/\$\$/g, '').trim();
+  src = src.replace(/(\bEND\b\s*\w*\s*;?)\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
+  // Find CREATE PROCEDURE name( and extract params handling nested parens
+  var prefixRe = /CREATE\s+(?:DEFINER\s*=\s*\S+\s+)?PROCEDURE\s+(\w+)\s*\(/i;
+  var pm = src.match(prefixRe);
+  if (!pm) throw new Error('无法解析MySQL存储过程头');
+  var name = pm[1];
+  var paramStart = pm.index + pm[0].length;
+  var depth = 1, pi = paramStart;
+  while (pi < src.length && depth > 0) {
+    if (src[pi] === '(') depth++;
+    else if (src[pi] === ')') depth--;
+    if (depth > 0) pi++;
+  }
+  var paramStr = src.substring(paramStart, pi);
+  var afterHeader = src.substring(pi + 1).trim();
+  var bodyMatch = afterHeader.match(/\bBEGIN\b([\s\S]*)\bEND\b\s*\w*\s*;?\s*$/i);
   if (!bodyMatch) throw new Error('无法找到MySQL存储过程体 BEGIN...END');
   var bodyContent = bodyMatch[1];
   var vars = [], bodyLines = bodyContent.split('\n'), nonDeclLines = [];
@@ -3061,16 +3278,30 @@ function _parseMySQLProcedure(input) {
 
 function _parsePGProcedure(input) {
   var src = input.trim();
-  var headerRe = /CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(\w+)\s*\(([^)]*)\)\s*(?:LANGUAGE\s+\w+\s*)?(?:AS\s*\$\$)/i;
-  var m = src.match(headerRe);
-  if (!m) {
-    // Try with LANGUAGE after AS $$
-    var headerRe2 = /CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(\w+)\s*\(([^)]*)\)\s*AS\s*\$\$/i;
-    m = src.match(headerRe2);
-    if (!m) throw new Error('无法解析PostgreSQL存储过程头');
+  src = src.replace(/(\$\$\s*;?)\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
+  // Find CREATE PROCEDURE name( with nested paren handling
+  var prefixRe = /CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(\w+)\s*\(/i;
+  var pm = src.match(prefixRe);
+  if (!pm) throw new Error('无法解析PostgreSQL存储过程头');
+  var name = pm[1];
+  var paramStart = pm.index + pm[0].length;
+  var depth = 1, pi = paramStart;
+  while (pi < src.length && depth > 0) {
+    if (src[pi] === '(') depth++;
+    else if (src[pi] === ')') depth--;
+    if (depth > 0) pi++;
   }
-  var name = m[1], paramStr = m[2];
-  var afterHeader = src.substring(m.index + m[0].length);
+  var paramStr = src.substring(paramStart, pi);
+  var afterParams = src.substring(pi + 1).trim();
+  // Match LANGUAGE ... AS $$ or just AS $$
+  var asRe = /^(?:LANGUAGE\s+\w+\s*)?AS\s*\$\$/i;
+  var am = afterParams.match(asRe);
+  if (!am) {
+    asRe = /^AS\s*\$\$/i;
+    am = afterParams.match(asRe);
+    if (!am) throw new Error('无法解析PostgreSQL存储过程头 AS $$');
+  }
+  var afterHeader = afterParams.substring(am[0].length);
   var inner = afterHeader.replace(/\$\$\s*;?\s*$/g, '').replace(/\bLANGUAGE\s+\w+\s*;?\s*$/gi, '').trim();
   inner = inner.replace(/\$\$\s*LANGUAGE\s+\w+\s*;?\s*$/gi, '').trim();
   var vars = [];
@@ -3115,9 +3346,11 @@ function _genOracleProcedure(name, params, vars, body) {
     if (v.defaultVal) out += ' := ' + v.defaultVal;
     out += ';\n';
   }
-  out += 'BEGIN' + body;
-  if (!/\bEND\s*;?\s*$/i.test(out.trim())) out += '\nEND;\n';
-  if (!out.trimEnd().match(/END\s*;\s*$/i)) out = out.trimEnd() + ';\n';
+  var cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '');
+  cleanBody = cleanBody.replace(/^\s*BEGIN\b/i, '');
+  out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
+  if (!/\bEND\b/i.test(out.split('BEGIN').pop())) out += 'END;\n';
+  else out = out.replace(/\bEND\b\s*\w*\s*;?\s*$/i, 'END;\n');
   out += '/';
   return out;
 }
@@ -3137,12 +3370,12 @@ function _genMySQLProcedure(name, params, vars, body) {
     if (v.defaultVal) out += ' DEFAULT ' + v.defaultVal;
     out += ';\n';
   }
-  out += body;
-  var afterBegin = out.substring(out.lastIndexOf('BEGIN'));
-  if (!/\bEND\b/i.test(afterBegin.split('BEGIN').pop())) out += '\nEND';
-  out = out.replace(/\bEND\s*;?\s*$/, 'END$$');
-  if (!out.trimEnd().endsWith('$$')) out = out.trimEnd() + '$$';
-  out += '\nDELIMITER ;';
+  var cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '').replace(/^\s*BEGIN\b/i, '');
+  out += cleanBody.replace(/^\n+/,'') + '\n';
+  out = out.replace(/\s+$/, '\n');
+  out = out.replace(/\bEND\b\s*\w*\s*;\s*(?:\/\s*)?$/i, '');
+  out += 'END$$\n';
+  out += 'DELIMITER ;';
   return out;
 }
 
@@ -3166,9 +3399,12 @@ function _genPGProcedure(name, params, vars, body) {
       out += ';\n';
     }
   }
-  out += 'BEGIN' + body;
-  if (!/\bEND\s*;?\s*$/i.test(out.trim())) out += '\nEND;\n';
-  out = out.replace(/END\s*;?\s*$/, 'END;\n$$;');
+  var cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '');
+  cleanBody = cleanBody.replace(/^\s*BEGIN\b/i, '');
+  out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
+  if (!/\bEND\b/i.test(out.split('BEGIN').pop())) out += 'END;\n';
+  else out = out.replace(/\bEND\b\s*\w*\s*;?\s*$/i, 'END;\n');
+  out = out.replace(/\s+$/, '') + '\n$$;';
   return out;
 }
 
