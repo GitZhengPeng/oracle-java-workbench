@@ -2879,6 +2879,220 @@ function transformBody(body, fromDb, toDb) {
     b = b.replace(/\bVARCHAR2\b/gi, 'VARCHAR');
   }
 
+  // ADD_MONTHS (Oracle -> PG/MySQL)
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') {
+      b = b.replace(/\bADD_MONTHS\s*\(\s*([^,]+),\s*([^)]+)\)/gi, '($1 + ($2 || \' month\')::interval)');
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bADD_MONTHS\s*\(\s*([^,]+),\s*([^)]+)\)/gi, 'DATE_ADD($1, INTERVAL $2 MONTH)');
+    }
+  } else if (fromDb === 'mysql') {
+    b = b.replace(/\bDATE_ADD\s*\(\s*([^,]+),\s*INTERVAL\s+(\S+)\s+MONTH\s*\)/gi, function(m, dt, n) {
+      if (toDb === 'oracle') return 'ADD_MONTHS(' + dt.trim() + ', ' + n.trim() + ')';
+      return '(' + dt.trim() + ' + (' + n.trim() + " || ' month')::interval)";
+    });
+  } else if (fromDb === 'postgresql') {
+    b = b.replace(/\(\s*([^+]+)\s*\+\s*\(\s*([^|]+)\s*\|\|\s*'\s*month\s*'\s*\)\s*::interval\s*\)/gi, function(m, dt, n) {
+      if (toDb === 'oracle') return 'ADD_MONTHS(' + dt.trim() + ', ' + n.trim() + ')';
+      return 'DATE_ADD(' + dt.trim() + ', INTERVAL ' + n.trim() + ' MONTH)';
+    });
+  }
+
+  // LAST_DAY (Oracle/MySQL have it; PG doesn't)
+  if ((fromDb === 'oracle' || fromDb === 'mysql') && toDb === 'postgresql') {
+    b = b.replace(/\bLAST_DAY\s*\(\s*([^)]+)\)/gi, "(date_trunc('month', $1) + interval '1 month - 1 day')::date");
+  } else if (fromDb === 'postgresql' && (toDb === 'oracle' || toDb === 'mysql')) {
+    b = b.replace(/\(\s*date_trunc\s*\(\s*'month'\s*,\s*([^)]+)\)\s*\+\s*interval\s*'1 month - 1 day'\s*\)::date/gi, 'LAST_DAY($1)');
+  }
+
+  // TRUNC for dates: TRUNC(dt, 'MM') / TRUNC(dt, 'MONTH')
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') {
+      b = b.replace(/\bTRUNC\s*\(\s*([^,]+),\s*'(?:MM|MON|MONTH)'\s*\)/gi, "date_trunc('month', $1)");
+      b = b.replace(/\bTRUNC\s*\(\s*([^,]+),\s*'(?:YY|YYYY|YEAR)'\s*\)/gi, "date_trunc('year', $1)");
+      b = b.replace(/\bTRUNC\s*\(\s*([^,]+),\s*'(?:DD|DDD|DAY)'\s*\)/gi, "date_trunc('day', $1)");
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bTRUNC\s*\(\s*([^,]+),\s*'(?:MM|MON|MONTH)'\s*\)/gi, "CAST(DATE_FORMAT($1, '%Y-%m-01') AS DATE)");
+      b = b.replace(/\bTRUNC\s*\(\s*([^,]+),\s*'(?:YY|YYYY|YEAR)'\s*\)/gi, "CAST(DATE_FORMAT($1, '%Y-01-01') AS DATE)");
+      b = b.replace(/\bTRUNC\s*\(\s*([^,]+),\s*'(?:DD|DDD|DAY)'\s*\)/gi, "CAST($1 AS DATE)");
+    }
+  }
+
+  // TRUNC(x, n) for numbers -> MySQL: TRUNCATE(x, n)
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bTRUNC\s*\(\s*([^,]+),\s*(\d+)\s*\)/gi, 'TRUNCATE($1, $2)');
+  } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
+    b = b.replace(/\bTRUNCATE\s*\(\s*([^,]+),\s*(\d+)\s*\)/gi, 'TRUNC($1, $2)');
+  }
+
+  // LENGTHB (Oracle) -> OCTET_LENGTH (PG) / LENGTH (MySQL)
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') b = b.replace(/\bLENGTHB\s*\(/gi, 'OCTET_LENGTH(');
+    else if (toDb === 'mysql') b = b.replace(/\bLENGTHB\s*\(/gi, 'LENGTH(');
+  } else if (fromDb === 'postgresql' && toDb === 'oracle') {
+    b = b.replace(/\bOCTET_LENGTH\s*\(/gi, 'LENGTHB(');
+  }
+
+  // LENGTH (character) -> MySQL: CHAR_LENGTH
+  if (fromDb === 'oracle' && toDb === 'mysql') {
+    b = b.replace(/\bLENGTH\s*\(/gi, 'CHAR_LENGTH(');
+  } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
+    b = b.replace(/\bCHAR_LENGTH\s*\(/gi, 'LENGTH(');
+  }
+
+  // INSTR -> PG strpos
+  if (fromDb === 'oracle' && toDb === 'postgresql') {
+    b = b.replace(/\bINSTR\s*\(/gi, 'strpos(');
+  } else if (fromDb === 'postgresql') {
+    if (toDb === 'oracle' || toDb === 'mysql') b = b.replace(/\bstrpos\s*\(/gi, 'INSTR(');
+  }
+
+  // NVL2 (Oracle -> PG/MySQL)
+  if (fromDb === 'oracle') {
+    b = b.replace(/\bNVL2\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, function(m, a, bv, c) {
+      if (toDb === 'postgresql') return 'CASE WHEN ' + a.trim() + ' IS NOT NULL THEN ' + bv.trim() + ' ELSE ' + c.trim() + ' END';
+      return 'IF(' + a.trim() + ' IS NOT NULL, ' + bv.trim() + ', ' + c.trim() + ')';
+    });
+  } else if (fromDb === 'mysql' && toDb === 'oracle') {
+    b = b.replace(/\bIF\s*\(\s*([^,]+?)\s+IS\s+NOT\s+NULL\s*,\s*([^,]+),\s*([^)]+)\)/gi, 'NVL2($1, $2, $3)');
+  }
+
+  // DBMS_RANDOM.VALUE -> random() / RAND()
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') b = b.replace(/\bDBMS_RANDOM\.VALUE\b/gi, 'random()');
+    else if (toDb === 'mysql') b = b.replace(/\bDBMS_RANDOM\.VALUE\b/gi, 'RAND()');
+  } else if (fromDb === 'mysql') {
+    if (toDb === 'oracle') b = b.replace(/\bRAND\s*\(\s*\)/gi, 'DBMS_RANDOM.VALUE');
+    else if (toDb === 'postgresql') b = b.replace(/\bRAND\s*\(\s*\)/gi, 'random()');
+  } else if (fromDb === 'postgresql') {
+    if (toDb === 'oracle') b = b.replace(/\brandom\s*\(\s*\)/gi, 'DBMS_RANDOM.VALUE');
+    else if (toDb === 'mysql') b = b.replace(/\brandom\s*\(\s*\)/gi, 'RAND()');
+  }
+
+  // LISTAGG / string_agg / GROUP_CONCAT
+  if (fromDb === 'oracle') {
+    b = b.replace(/\bLISTAGG\s*\(\s*([^,]+),\s*'([^']*)'\s*\)\s*WITHIN\s+GROUP\s*\(\s*ORDER\s+BY\s+([^)]+)\)/gi, function(m, col, sep, orderBy) {
+      if (toDb === 'postgresql') return "string_agg(" + col.trim() + ", '" + sep + "' ORDER BY " + orderBy.trim() + ")";
+      return "GROUP_CONCAT(" + col.trim() + " ORDER BY " + orderBy.trim() + " SEPARATOR '" + sep + "')";
+    });
+  } else if (fromDb === 'postgresql') {
+    b = b.replace(/\bstring_agg\s*\(\s*([^,]+),\s*'([^']*)'\s+ORDER\s+BY\s+([^)]+)\)/gi, function(m, col, sep, orderBy) {
+      if (toDb === 'oracle') return "LISTAGG(" + col.trim() + ", '" + sep + "') WITHIN GROUP (ORDER BY " + orderBy.trim() + ")";
+      return "GROUP_CONCAT(" + col.trim() + " ORDER BY " + orderBy.trim() + " SEPARATOR '" + sep + "')";
+    });
+  } else if (fromDb === 'mysql') {
+    b = b.replace(/\bGROUP_CONCAT\s*\(\s*([^)]*?)\s+ORDER\s+BY\s+([^)]*?)\s+SEPARATOR\s+'([^']*)'\s*\)/gi, function(m, col, orderBy, sep) {
+      if (toDb === 'oracle') return "LISTAGG(" + col.trim() + ", '" + sep + "') WITHIN GROUP (ORDER BY " + orderBy.trim() + ")";
+      return "string_agg(" + col.trim() + ", '" + sep + "' ORDER BY " + orderBy.trim() + ")";
+    });
+  }
+
+  // Sequence: seq.NEXTVAL / seq.CURRVAL
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') {
+      b = b.replace(/\b(\w+)\.NEXTVAL\b/gi, "nextval('$1')");
+      b = b.replace(/\b(\w+)\.CURRVAL\b/gi, "currval('$1')");
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\b(\w+)\.NEXTVAL\b/gi, "/* [注意: MySQL 无序列, 请使用 AUTO_INCREMENT] */ $1.NEXTVAL");
+      b = b.replace(/\b(\w+)\.CURRVAL\b/gi, 'LAST_INSERT_ID()');
+    }
+  } else if (fromDb === 'postgresql') {
+    if (toDb === 'oracle') {
+      b = b.replace(/\bnextval\s*\(\s*'(\w+)'\s*\)/gi, '$1.NEXTVAL');
+      b = b.replace(/\bcurrval\s*\(\s*'(\w+)'\s*\)/gi, '$1.CURRVAL');
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bnextval\s*\(\s*'(\w+)'\s*\)/gi, "/* [注意: MySQL 无序列, 请使用 AUTO_INCREMENT] */ nextval('$1')");
+      b = b.replace(/\bcurrval\s*\(\s*'(\w+)'\s*\)/gi, 'LAST_INSERT_ID()');
+    }
+  }
+
+  // SQL%ROWCOUNT / ROW_COUNT()
+  if (fromDb === 'oracle') {
+    if (toDb === 'mysql') b = b.replace(/\bSQL%ROWCOUNT\b/gi, 'ROW_COUNT()');
+    else if (toDb === 'postgresql') b = b.replace(/\bSQL%ROWCOUNT\b/gi, '/* [注意: PG 请使用 GET DIAGNOSTICS v_cnt = ROW_COUNT;] */ SQL%ROWCOUNT');
+  } else if (fromDb === 'mysql') {
+    if (toDb === 'oracle') b = b.replace(/\bROW_COUNT\s*\(\s*\)/gi, 'SQL%ROWCOUNT');
+    else if (toDb === 'postgresql') b = b.replace(/\bROW_COUNT\s*\(\s*\)/gi, '/* [注意: PG 请使用 GET DIAGNOSTICS v_cnt = ROW_COUNT;] */ ROW_COUNT()');
+  }
+
+  // ELSIF <-> ELSEIF
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bELSIF\b/gi, 'ELSEIF');
+  } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
+    b = b.replace(/\bELSEIF\b/gi, 'ELSIF');
+  }
+
+  // Assignment: := -> SET (Oracle/PG -> MySQL)
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/^(\s*)(\w+)\s*:=\s*(.+);/gm, '$1SET $2 = $3;');
+  } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
+    b = b.replace(/^\s*SET\s+(\w+)\s*=\s*(.+);/gim, function(m, vname, expr) {
+      if (/^(TRANSACTION|SESSION|GLOBAL|NAMES|CHARACTER)/i.test(vname)) return m;
+      return '  ' + vname + ' := ' + expr.trim() + ';';
+    });
+  }
+
+  // WHILE LOOP <-> WHILE DO
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bWHILE\b(.+?)\bLOOP\b/gi, 'WHILE$1DO');
+    b = b.replace(/\bEND\s+LOOP\b/gi, 'END WHILE');
+  } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
+    b = b.replace(/\bWHILE\b(.+?)\bDO\b/gi, 'WHILE$1LOOP');
+    b = b.replace(/\bEND\s+WHILE\b/gi, 'END LOOP');
+  }
+
+  // EXIT WHEN -> MySQL IF...LEAVE
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bEXIT\s+WHEN\s+(.+?)\s*;/gi, 'IF $1 THEN\n    LEAVE;\n  END IF;');
+  }
+
+  // RAISE_APPLICATION_ERROR -> RAISE EXCEPTION / SIGNAL
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') {
+      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*'([^']*)'\s*\)\s*;/gi, "RAISE EXCEPTION '$1' USING ERRCODE = 'P0001';");
+      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*([^)]+)\)\s*;/gi, "RAISE EXCEPTION '%', $1 USING ERRCODE = 'P0001';");
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*'([^']*)'\s*\)\s*;/gi, "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '$1';");
+      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*([^)]+)\)\s*;/gi, "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = $1;");
+    }
+  } else if (fromDb === 'postgresql') {
+    if (toDb === 'oracle') {
+      b = b.replace(/\bRAISE\s+EXCEPTION\s+'([^']*)'\s*(?:USING\s+[^;]+)?\s*;/gi, "RAISE_APPLICATION_ERROR(-20001, '$1');");
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bRAISE\s+EXCEPTION\s+'([^']*)'\s*(?:USING\s+[^;]+)?\s*;/gi, "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '$1';");
+    }
+  } else if (fromDb === 'mysql') {
+    if (toDb === 'oracle') {
+      b = b.replace(/\bSIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']*)'\s*;/gi, "RAISE_APPLICATION_ERROR(-20001, '$1');");
+    } else if (toDb === 'postgresql') {
+      b = b.replace(/\bSIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']*)'\s*;/gi, "RAISE EXCEPTION '$1' USING ERRCODE = 'P0001';");
+    }
+  }
+
+  // RAISE; (re-throw) <-> RESIGNAL;
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bRAISE\s*;/gi, 'RESIGNAL;');
+  } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
+    b = b.replace(/\bRESIGNAL\s*;/gi, 'RAISE;');
+  }
+
+  // INITCAP (Oracle/PG -> MySQL: no native equivalent)
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bINITCAP\s*\(\s*([^)]+)\)/gi, '/* [注意: MySQL 无 INITCAP, 需自定义函数] */ INITCAP($1)');
+  }
+
+  // REGEXP_LIKE (Oracle -> MySQL: REGEXP)
+  if (fromDb === 'oracle' && toDb === 'mysql') {
+    b = b.replace(/\bREGEXP_LIKE\s*\(\s*([^,]+),\s*([^)]+)\)/gi, '$1 REGEXP $2');
+  } else if (fromDb === 'mysql' && toDb === 'oracle') {
+    b = b.replace(/\b(\w+)\s+REGEXP\s+(\S+)/gi, 'REGEXP_LIKE($1, $2)');
+  }
+
+  // CURRENT_TIMESTAMP -> Oracle SYSTIMESTAMP
+  if (fromDb === 'mysql' && toDb === 'oracle') {
+    b = b.replace(/\bCURRENT_TIMESTAMP\b/gi, 'SYSTIMESTAMP');
+  }
+
   return b;
 }
 
