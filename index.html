@@ -2537,6 +2537,12 @@ function convertDDL(input, sourceDb, targetDb) {
 function mapParamType(typeStr, fromDb, toDb) {
   if (!typeStr) return typeStr;
   let t = typeStr.trim();
+  // Handle %ROWTYPE (Oracle cursor row type)
+  if (/%ROWTYPE\b/i.test(t)) {
+    if (toDb === 'postgresql') return 'RECORD';
+    if (toDb === 'mysql') return 'VARCHAR(4000) /* [注意: 原为 ' + t + ', MySQL 无 %ROWTYPE] */';
+    return t;
+  }
   if (fromDb === toDb) return t;
 
   if (fromDb === 'oracle') {
@@ -2633,6 +2639,8 @@ function mapParamType(typeStr, fromDb, toDb) {
       t = t.replace(/\bTIMESTAMP\b/gi, 'DATETIME');
       t = t.replace(/\bBOOLEAN\b/gi, 'TINYINT(1)');
       t = t.replace(/\bDOUBLE PRECISION\b/gi, 'DOUBLE');
+      t = t.replace(/\bVARCHAR\b(?!\s*\()/gi, 'VARCHAR(4000)');
+      t = t.replace(/\bRECORD\b/gi, 'VARCHAR(4000) /* [注意: PG RECORD 类型, MySQL 无等价类型] */');
     }
   }
 
@@ -2663,6 +2671,62 @@ function _convertConcatToFunction(line) {
   const leading = line.match(/^(\s*)/)[1];
   const trimmed = line.trim();
 
+  // Helper: recursively convert || inside an expression, including within function args
+  function _deepConvertPipe(expr) {
+    if (expr.indexOf('||') < 0) return expr;
+    // First try splitting at depth 0
+    var parts = _splitOnPipeOutsideStringsAndParens(expr);
+    if (parts.length > 1) {
+      // Recursively process each part for nested || inside parens
+      var processed = parts.map(function(p) { return _deepConvertInside(p.trim()); });
+      return 'CONCAT(' + processed.join(', ') + ')';
+    }
+    // No top-level ||, try inside function arguments
+    return _deepConvertInside(expr);
+  }
+
+  // Convert || inside function argument lists
+  function _deepConvertInside(expr) {
+    if (expr.indexOf('||') < 0) return expr;
+    var result = '', i = 0;
+    while (i < expr.length) {
+      if (expr[i] === "'" ) {
+        // Skip string literal
+        result += expr[i]; i++;
+        while (i < expr.length) {
+          if (expr[i] === "'" && i+1 < expr.length && expr[i+1] === "'") {
+            result += "''"; i += 2;
+          } else if (expr[i] === "'") {
+            result += "'"; i++; break;
+          } else { result += expr[i]; i++; }
+        }
+      } else if (expr[i] === '(') {
+        // Find matching close paren and recursively convert
+        var start = i; var depth = 1; i++;
+        var inQ = false;
+        while (i < expr.length && depth > 0) {
+          if (expr[i] === "'" && !inQ) inQ = true;
+          else if (expr[i] === "'" && inQ) { if (i+1<expr.length && expr[i+1]==="'") i++; else inQ = false; }
+          else if (!inQ) { if (expr[i] === '(') depth++; else if (expr[i] === ')') depth--; }
+          if (depth > 0) i++;
+        }
+        var inner = expr.substring(start + 1, i);
+        // Convert || inside each comma-separated argument
+        if (inner.indexOf('||') >= 0) {
+          var args = _splitArgs(inner);
+          var convertedArgs = args.map(function(a) { return _deepConvertPipe(a.trim()); });
+          result += '(' + convertedArgs.join(', ') + ')';
+        } else {
+          result += '(' + inner + ')';
+        }
+        i++; // skip closing paren
+      } else {
+        result += expr[i]; i++;
+      }
+    }
+    return result;
+  }
+
   // Match assignment (:= expr;), SET var = expr;, or RETURN expr;
   const assignMatch = trimmed.match(/^(.+?:=\s*)(.*\|\|.*?)(;\s*$)/i);
   const setMatch = !assignMatch && trimmed.match(/^(SET\s+\w+\s*=\s*)(.*\|\|.*?)(;\s*$)/i);
@@ -2674,18 +2738,15 @@ function _convertConcatToFunction(line) {
     const prefix = match[1];
     const expr = match[2];
     const suffix = match[3];
-    const parts = _splitOnPipeOutsideStringsAndParens(expr);
-    if (parts.length > 1) {
-      return leading + prefix + 'CONCAT(' + parts.map(function(p) { return p.trim(); }).join(', ') + ')' + suffix;
-    }
-    return line;
+    var converted = _deepConvertPipe(expr);
+    return leading + prefix + converted + suffix;
   }
 
   // Handle function calls with || inside arguments, e.g. DBMS_OUTPUT.PUT_LINE('x' || y);
   // Replace || inside each top-level parenthesized argument list
-  let converted = trimmed;
+  let convertedLine = trimmed;
   let changed = false;
-  converted = converted.replace(/(\b\w+(?:\.\w+)?\s*)\(([^()]*\|\|[^()]*)\)/g, function(fm, fnName, inner) {
+  convertedLine = convertedLine.replace(/(\b\w+(?:\.\w+)?\s*)\(([^()]*\|\|[^()]*)\)/g, function(fm, fnName, inner) {
     const innerParts = _splitOnPipeOutsideStringsAndParens(inner);
     if (innerParts.length > 1) {
       changed = true;
@@ -2693,7 +2754,7 @@ function _convertConcatToFunction(line) {
     }
     return fm;
   });
-  if (changed) return leading + converted;
+  if (changed) return leading + convertedLine;
 
   // Fallback: try to convert the whole line if it has ||
   const parts2 = _splitOnPipeOutsideStringsAndParens(trimmed);
@@ -2929,18 +2990,104 @@ function transformBody(body, fromDb, toDb) {
     b = b.replace(/\bSUBSTRING\s*\(/gi, 'SUBSTR(');
   }
 
+  // RAISE_APPLICATION_ERROR -> RAISE EXCEPTION / SIGNAL (must run BEFORE || -> CONCAT)
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') {
+      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*'([^']*)'\s*\)\s*;/gi, "RAISE EXCEPTION '$1' USING ERRCODE = 'P0001';");
+      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*((?:[^)]*\|\|[^)]*|'[^']*'|[^)]+)+)\)\s*;/gi, "RAISE EXCEPTION '%', $1 USING ERRCODE = 'P0001';");
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*'([^']*)'\s*\)\s*;/gi, "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '$1';");
+      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*((?:[^)]*\|\|[^)]*|'[^']*'|[^)]+)+)\)\s*;/gi, function(m, msg) {
+        // Convert || to CONCAT in the message for MySQL
+        var parts = _splitOnPipeOutsideStringsAndParens(msg);
+        var converted = parts.length > 1 ? 'CONCAT(' + parts.map(function(p) { return p.trim(); }).join(', ') + ')' : msg;
+        // MySQL SIGNAL doesn't allow function calls in SET MESSAGE_TEXT; use a variable
+        if (/\bCONCAT\s*\(/i.test(converted) || /[^']\w+[^']/i.test(converted)) {
+          return "SET @_signal_msg = " + converted + ";\n    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @_signal_msg;";
+        }
+        return "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = " + converted + ";";
+      });
+    }
+  } else if (fromDb === 'postgresql') {
+    if (toDb === 'oracle') {
+      b = b.replace(/\bRAISE\s+EXCEPTION\s+'([^']*)'\s*(?:USING\s+[^;]+)?\s*;/gi, "RAISE_APPLICATION_ERROR(-20001, '$1');");
+      b = b.replace(/\bRAISE\s+EXCEPTION\s+'[^']*',\s*([^;]+?)\s*(?:USING\s+[^;]+)?\s*;/gi, "RAISE_APPLICATION_ERROR(-20001, $1);");
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bRAISE\s+EXCEPTION\s+'([^']*)'\s*(?:USING\s+[^;]+)?\s*;/gi, "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '$1';");
+      b = b.replace(/\bRAISE\s+EXCEPTION\s+'[^']*',\s*([^;]+?)\s*(?:USING\s+[^;]+)?\s*;/gi, function(m, expr) {
+        // MySQL SIGNAL doesn't allow expressions in SET MESSAGE_TEXT
+        return "SET @_signal_msg = " + expr.trim() + ";\n    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @_signal_msg;";
+      });
+    }
+  } else if (fromDb === 'mysql') {
+    if (toDb === 'oracle') {
+      b = b.replace(/\bSIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']*)'\s*;/gi, "RAISE_APPLICATION_ERROR(-20001, '$1');");
+      b = b.replace(/\bSIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*([^;]+)\s*;/gi, "RAISE_APPLICATION_ERROR(-20001, $1);");
+    } else if (toDb === 'postgresql') {
+      b = b.replace(/\bSIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']*)'\s*;/gi, "RAISE EXCEPTION '$1' USING ERRCODE = 'P0001';");
+      b = b.replace(/\bSIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*([^;]+)\s*;/gi, "RAISE EXCEPTION '%', $1 USING ERRCODE = 'P0001';");
+    }
+  }
+
+  // RAISE; (re-throw) <-> RESIGNAL; (must run BEFORE || -> CONCAT)
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bRAISE\s*;/gi, 'RESIGNAL;');
+  } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
+    b = b.replace(/\bRESIGNAL\s*;/gi, 'RAISE;');
+  }
+
+  // Pre-convert RAISE NOTICE / DBMS_OUTPUT before || -> CONCAT to avoid wrapping prefixes
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    // Handle PG RAISE NOTICE with % format placeholders
+    b = b.replace(/\bRAISE\s+NOTICE\s+'([^']*)',\s*([^;]+);/gi, function(m, fmt, args) {
+      // Count % placeholders in format string (but not %%)
+      var parts = fmt.split('%');
+      var argList = args.split(',').map(function(a) { return a.trim(); });
+      if (parts.length > 1 && argList.length >= parts.length - 1) {
+        // Build CONCAT expression
+        var concatParts = [];
+        for (var i = 0; i < parts.length; i++) {
+          if (parts[i]) concatParts.push("'" + parts[i] + "'");
+          if (i < parts.length - 1 && argList[i]) concatParts.push(argList[i]);
+        }
+        return 'SELECT CONCAT(' + concatParts.join(', ') + ');';
+      }
+      // Simple single-value format
+      return 'SELECT ' + args.trim() + ';';
+    });
+    b = b.replace(/\bDBMS_OUTPUT\.PUT_LINE\s*\(\s*([^;]+)\)\s*;/gi, 'SELECT $1;');
+  }
+
   // String concatenation: || vs CONCAT
   if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
     // Convert CONCAT(a, b, c) to (a || b || c) handling nested parens
     b = _convertConcatToPipe(b);
   } else if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
-    const lines = b.split('\n');
-    for (let li = 0; li < lines.length; li++) {
-      if (lines[li].indexOf('||') >= 0 && !/^\s*--/.test(lines[li])) {
-        lines[li] = _convertConcatToFunction(lines[li]);
+    // Join multi-line || expressions into single logical lines before conversion
+    // A continuation line starts with optional whitespace then ||
+    var joinedLines = [];
+    var accum = '';
+    var bLines = b.split('\n');
+    for (var li = 0; li < bLines.length; li++) {
+      var line = bLines[li];
+      if (/^\s*\|\|/.test(line) && accum) {
+        // Continuation of previous line's || expression
+        accum += '\n' + line;
+      } else {
+        if (accum) joinedLines.push(accum);
+        accum = line;
       }
     }
-    b = lines.join('\n');
+    if (accum) joinedLines.push(accum);
+
+    for (var ji = 0; ji < joinedLines.length; ji++) {
+      if (joinedLines[ji].indexOf('||') >= 0 && !/^\s*--/.test(joinedLines[ji])) {
+        // Flatten multi-line into single line for conversion, then restore
+        var flat = joinedLines[ji].replace(/\n\s*/g, ' ');
+        joinedLines[ji] = _convertConcatToFunction(flat);
+      }
+    }
+    b = joinedLines.join('\n');
   }
 
   // CONCAT_WS (MySQL-specific) -> Oracle || / PG concat_ws
@@ -3008,13 +3155,17 @@ function transformBody(body, fromDb, toDb) {
     } else if (toDb === 'postgresql') {
       b = b.replace(/\bSELECT\s+(.+?)\s*;\s*(?=\n|$)/gi, function(m, expr) {
         if (/\b(INTO|FROM|WHERE)\b/i.test(expr)) return m;
-        return "RAISE NOTICE '%', " + expr.trim() + ';';
+        // Strip trailing AS alias from debug SELECT
+        var cleanExpr = expr.trim().replace(/\s+AS\s+\w+\s*$/i, '');
+        return "RAISE NOTICE '%', " + cleanExpr + ';';
       });
     }
   } else if (fromDb === 'postgresql') {
     if (toDb === 'oracle') {
       b = b.replace(/\bRAISE\s+NOTICE\s+'[^']*',\s*([^;]+);/gi, 'DBMS_OUTPUT.PUT_LINE($1);');
     } else if (toDb === 'mysql') {
+      // RAISE NOTICE already pre-converted to SELECT before || -> CONCAT conversion
+      // Handle any remaining ones
       b = b.replace(/\bRAISE\s+NOTICE\s+'[^']*',\s*([^;]+);/gi, 'SELECT $1;');
     }
   }
@@ -3022,7 +3173,32 @@ function transformBody(body, fromDb, toDb) {
   // EXCEPTION handling
   if (fromDb === 'oracle' || fromDb === 'postgresql') {
     if (toDb === 'mysql') {
-      // Convert EXCEPTION block to MySQL DECLARE EXIT HANDLER
+      // First, convert nested BEGIN...EXCEPTION...END blocks (e.g., inside WHILE loops)
+      // The outer BEGIN/END is already stripped, so any BEGIN...EXCEPTION...END here is nested
+      b = b.replace(/\bBEGIN\b([\s\S]*?)\bEXCEPTION\b([\s\S]*?)\bEND\b\s*;/gi, function(match, bodyBefore, exBlock) {
+        var othersMatch = exBlock.match(/WHEN\s+OTHERS\s+THEN([\s\S]*)/i);
+        var handlerStmt = '';
+        if (othersMatch) {
+          handlerStmt = othersMatch[1].trim();
+        }
+        // Build MySQL nested BEGIN block with local DECLARE HANDLER
+        var result = 'BEGIN\n';
+        result += '            DECLARE EXIT HANDLER FOR SQLEXCEPTION\n';
+        result += '            BEGIN\n';
+        var hLines = handlerStmt.split('\n');
+        for (var hi = 0; hi < hLines.length; hi++) {
+          var hl = hLines[hi].trim();
+          if (!hl) continue;
+          // Convert := assignments to SET
+          hl = hl.replace(/^(\w+)\s*:=\s*/i, 'SET $1 = ');
+          result += '              ' + hl + '\n';
+        }
+        result += '            END;\n';
+        result += bodyBefore;
+        result += 'END;';
+        return result;
+      });
+      // Convert top-level EXCEPTION block to MySQL DECLARE EXIT HANDLER
       b = b.replace(/\bEXCEPTION\b([\s\S]*?)$/i, function(match, exBlock) {
         // Try to extract WHEN OTHERS THEN block
         const othersMatch = exBlock.match(/WHEN\s+OTHERS\s+THEN([\s\S]*?)(?=WHEN\s+\w|$)/i);
@@ -3069,6 +3245,11 @@ function transformBody(body, fromDb, toDb) {
               result += '    RESIGNAL;\n';
             } else if (/ROLLBACK/i.test(tl)) {
               result += '    ROLLBACK;\n';
+            } else if (/^\s*SELECT\s+/i.test(tl) && !/\bINTO\b/i.test(tl) && !/\bFROM\b/i.test(tl)) {
+              // SELECT without INTO/FROM is for output - not allowed in MySQL functions
+              // Convert to SET @_debug variable
+              var selExpr = tl.replace(/^\s*SELECT\s+/i, '').replace(/;\s*$/, '');
+              result += '    SET @_debug_msg = ' + selExpr + ';\n';
             } else {
               result += '    ' + tl + '\n';
             }
@@ -3120,6 +3301,52 @@ function transformBody(body, fromDb, toDb) {
     b = b.replace(/\bVARCHAR2\b/gi, 'VARCHAR');
   }
 
+  // LIMIT -> ROWNUM (MySQL/PG -> Oracle)
+  if ((fromDb === 'mysql' || fromDb === 'postgresql') && toDb === 'oracle') {
+    b = b.replace(/\bLIMIT\s+(\d+)\s*;/gi, function(m, n) {
+      return ';'; // Remove LIMIT, Oracle doesn't support it (ROWNUM would need query restructure)
+    });
+    b = b.replace(/\bLIMIT\s+(\d+)\s*$/gim, ''); // Remove trailing LIMIT without semicolon
+  }
+
+  // PG ::TYPE cast -> Oracle TO_xxx / MySQL CAST
+  if (fromDb === 'postgresql') {
+    b = b.replace(/(\w+)::TEXT\b/gi, function(m, v) {
+      if (toDb === 'oracle') return 'TO_CHAR(' + v + ')';
+      return 'CAST(' + v + ' AS CHAR)';
+    });
+    b = b.replace(/(\w+)::INTEGER\b/gi, function(m, v) {
+      if (toDb === 'oracle') return 'TO_NUMBER(' + v + ')';
+      return 'CAST(' + v + ' AS SIGNED)';
+    });
+    b = b.replace(/(\w+)::NUMERIC\b/gi, function(m, v) {
+      if (toDb === 'oracle') return 'TO_NUMBER(' + v + ')';
+      return 'CAST(' + v + ' AS DECIMAL)';
+    });
+    b = b.replace(/(\w+)::DATE\b/gi, function(m, v) {
+      if (toDb === 'oracle') return 'TRUNC(' + v + ')';
+      return 'CAST(' + v + ' AS DATE)';
+    });
+  }
+
+  // MONTHS_BETWEEN (Oracle -> PG/MySQL)
+  if (fromDb === 'oracle') {
+    if (toDb === 'mysql') {
+      b = b.replace(/\bMONTHS_BETWEEN\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+)\)/gi, 'TIMESTAMPDIFF(MONTH, $2, $1)');
+    } else if (toDb === 'postgresql') {
+      b = b.replace(/\bMONTHS_BETWEEN\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+)\)/gi,
+        "(EXTRACT(YEAR FROM AGE($1, $2)) * 12 + EXTRACT(MONTH FROM AGE($1, $2)))");
+    }
+  } else if (fromDb === 'mysql' && toDb === 'oracle') {
+    b = b.replace(/\bTIMESTAMPDIFF\s*\(\s*MONTH\s*,\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+)\)/gi, 'MONTHS_BETWEEN($2, $1)');
+  } else if (fromDb === 'mysql' && toDb === 'postgresql') {
+    b = b.replace(/\bTIMESTAMPDIFF\s*\(\s*MONTH\s*,\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+)\)/gi,
+      "(EXTRACT(YEAR FROM AGE($2, $1)) * 12 + EXTRACT(MONTH FROM AGE($2, $1)))");
+  } else if (fromDb === 'postgresql' && toDb === 'oracle') {
+    b = b.replace(/\(\s*EXTRACT\s*\(\s*YEAR\s+FROM\s+AGE\s*\(\s*([^,]+),\s*([^)]+)\)\s*\)\s*\*\s*12\s*\+\s*EXTRACT\s*\(\s*MONTH\s+FROM\s+AGE\s*\(\s*[^,]+,\s*[^)]+\)\s*\)\s*\)/gi,
+      'MONTHS_BETWEEN($1, $2)');
+  }
+
   // ADD_MONTHS (Oracle -> PG/MySQL)
   if (fromDb === 'oracle') {
     if (toDb === 'postgresql') {
@@ -3159,17 +3386,50 @@ function transformBody(body, fromDb, toDb) {
     }
   }
 
+  // TRUNC(SYSDATE/NOW()/CURRENT_DATE) - date truncation to midnight (must run before numeric TRUNC)
+  if (fromDb === 'oracle') {
+    if (toDb === 'mysql') {
+      b = b.replace(/\bTRUNC\s*\(\s*(?:SYSDATE|NOW\s*\(\s*\)|CURRENT_DATE|CURDATE\s*\(\s*\))\s*\)/gi, 'CURDATE()');
+    } else if (toDb === 'postgresql') {
+      b = b.replace(/\bTRUNC\s*\(\s*(?:SYSDATE|CURRENT_DATE|CURRENT_TIMESTAMP)\s*\)/gi, 'CURRENT_DATE');
+    }
+  }
+
   // TRUNC(x, n) for numbers -> MySQL: TRUNCATE(x, n)
   if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
-    b = b.replace(/\bTRUNC\s*\(\s*([^,]+),\s*(\d+)\s*\)/gi, 'TRUNCATE($1, $2)');
+    // Use paren-aware matching to avoid false matches on nested commas
+    var truncRe = /\bTRUNC\s*\(/gi;
+    var truncMatch, truncResult = '', truncLast = 0;
+    while ((truncMatch = truncRe.exec(b)) !== null) {
+      var tStart = truncMatch.index + truncMatch[0].length;
+      var tDepth = 1, ti = tStart;
+      while (ti < b.length && tDepth > 0) {
+        if (b[ti] === '(') tDepth++;
+        else if (b[ti] === ')') tDepth--;
+        if (tDepth > 0) ti++;
+      }
+      var tInner = b.substring(tStart, ti);
+      var tArgs = _splitArgs(tInner);
+      truncResult += b.substring(truncLast, truncMatch.index);
+      if (tArgs.length === 2 && /^\s*\d+\s*$/.test(tArgs[1])) {
+        truncResult += 'TRUNCATE(' + tArgs[0].trim() + ', ' + tArgs[1].trim() + ')';
+      } else if (tArgs.length === 1) {
+        truncResult += 'TRUNCATE(' + tArgs[0].trim() + ', 0)';
+      } else {
+        truncResult += truncMatch[0] + tInner + ')'; // fallback
+      }
+      truncLast = ti + 1; // skip closing paren
+    }
+    if (truncLast > 0) b = truncResult + b.substring(truncLast);
   } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
     b = b.replace(/\bTRUNCATE\s*\(\s*([^,]+),\s*(\d+)\s*\)/gi, 'TRUNC($1, $2)');
   }
 
-  // LENGTHB (Oracle) -> OCTET_LENGTH (PG) / LENGTH (MySQL)
+  // LENGTHB (Oracle) -> OCTET_LENGTH (PG) / LENGTH (MySQL byte-length)
+  // Must mark LENGTHB before LENGTH->CHAR_LENGTH to avoid double conversion
   if (fromDb === 'oracle') {
     if (toDb === 'postgresql') b = b.replace(/\bLENGTHB\s*\(/gi, 'OCTET_LENGTH(');
-    else if (toDb === 'mysql') b = b.replace(/\bLENGTHB\s*\(/gi, 'LENGTH(');
+    else if (toDb === 'mysql') b = b.replace(/\bLENGTHB\s*\(/gi, '__BYTE_LENGTH__(');
   } else if (fromDb === 'postgresql' && toDb === 'oracle') {
     b = b.replace(/\bOCTET_LENGTH\s*\(/gi, 'LENGTHB(');
   }
@@ -3177,6 +3437,8 @@ function transformBody(body, fromDb, toDb) {
   // LENGTH (character) -> MySQL: CHAR_LENGTH
   if (fromDb === 'oracle' && toDb === 'mysql') {
     b = b.replace(/\bLENGTH\s*\(/gi, 'CHAR_LENGTH(');
+    // Now restore LENGTHB -> LENGTH (byte length in MySQL)
+    b = b.replace(/__BYTE_LENGTH__\s*\(/g, 'LENGTH(');
   } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
     b = b.replace(/\bCHAR_LENGTH\s*\(/gi, 'LENGTH(');
   }
@@ -3188,18 +3450,69 @@ function transformBody(body, fromDb, toDb) {
     if (toDb === 'oracle' || toDb === 'mysql') b = b.replace(/\bstrpos\s*\(/gi, 'INSTR(');
   }
 
-  // NVL2 (Oracle -> PG/MySQL)
+  // NVL2 (Oracle -> PG/MySQL) - needs paren-aware arg extraction
   if (fromDb === 'oracle') {
-    b = b.replace(/\bNVL2\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, function(m, a, bv, c) {
-      if (toDb === 'postgresql') return 'CASE WHEN ' + a.trim() + ' IS NOT NULL THEN ' + bv.trim() + ' ELSE ' + c.trim() + ' END';
-      return 'IF(' + a.trim() + ' IS NOT NULL, ' + bv.trim() + ', ' + c.trim() + ')';
-    });
+    var nvl2Re = /\bNVL2\s*\(/gi;
+    var nvl2Match, nvl2Result = '', nvl2Last = 0;
+    while ((nvl2Match = nvl2Re.exec(b)) !== null) {
+      nvl2Result += b.substring(nvl2Last, nvl2Match.index);
+      var nvl2Start = nvl2Match.index + nvl2Match[0].length;
+      var nvl2Depth = 1, nvl2J = nvl2Start, nvl2InQ = false;
+      while (nvl2J < b.length && nvl2Depth > 0) {
+        if (b[nvl2J] === "'" && !nvl2InQ) nvl2InQ = true;
+        else if (b[nvl2J] === "'" && nvl2InQ) { if (nvl2J+1<b.length && b[nvl2J+1]==="'") nvl2J++; else nvl2InQ = false; }
+        else if (!nvl2InQ) { if (b[nvl2J] === '(') nvl2Depth++; else if (b[nvl2J] === ')') nvl2Depth--; }
+        if (nvl2Depth > 0) nvl2J++;
+      }
+      var nvl2Inner = b.substring(nvl2Start, nvl2J);
+      var nvl2Args = _splitArgs(nvl2Inner);
+      if (nvl2Args.length >= 3) {
+        var nvl2A = nvl2Args[0].trim(), nvl2B = nvl2Args[1].trim(), nvl2C = nvl2Args[2].trim();
+        if (toDb === 'postgresql') nvl2Result += 'CASE WHEN ' + nvl2A + ' IS NOT NULL THEN ' + nvl2B + ' ELSE ' + nvl2C + ' END';
+        else nvl2Result += 'IF(' + nvl2A + ' IS NOT NULL, ' + nvl2B + ', ' + nvl2C + ')';
+      } else {
+        nvl2Result += nvl2Match[0] + nvl2Inner + ')';
+      }
+      nvl2Last = nvl2J + 1;
+    }
+    if (nvl2Last > 0) { nvl2Result += b.substring(nvl2Last); b = nvl2Result; }
   } else if (fromDb === 'mysql' && toDb === 'oracle') {
     b = b.replace(/\bIF\s*\(\s*([^,]+?)\s+IS\s+NOT\s+NULL\s*,\s*([^,]+),\s*([^)]+)\)/gi, 'NVL2($1, $2, $3)');
   }
 
-  // DBMS_RANDOM.VALUE -> random() / RAND()
+  // MySQL IF(cond, a, b) -> CASE WHEN for Oracle/PG (must handle nested IF calls)
+  if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
+    // Iteratively replace innermost IF() calls to avoid regex nesting issues
+    var ifMaxIter = 20;
+    while (ifMaxIter-- > 0 && /\bIF\s*\(/i.test(b)) {
+      var prevB = b;
+      b = b.replace(/\bIF\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+)\)/gi,
+        function(m, cond, thenVal, elseVal) {
+          return 'CASE WHEN ' + cond.trim() + ' THEN ' + thenVal.trim() + ' ELSE ' + elseVal.trim() + ' END';
+        });
+      if (b === prevB) break;
+    }
+  }
+
+  // MySQL DATE_SUB -> Oracle/PG
+  if (fromDb === 'mysql') {
+    b = b.replace(/\bDATE_SUB\s*\(\s*([^,]+),\s*INTERVAL\s+(\S+)\s+(\w+)\s*\)/gi, function(m, dt, n, unit) {
+      if (toDb === 'oracle') {
+        if (/month/i.test(unit)) return 'ADD_MONTHS(' + dt.trim() + ', -' + n.trim() + ')';
+        return '(' + dt.trim() + ' - INTERVAL \'' + n.trim() + '\' ' + unit.trim() + ')';
+      }
+      return '(' + dt.trim() + " - INTERVAL '" + n.trim() + ' ' + unit.trim().toLowerCase() + "')";
+    });
+  }
+
+  // DBMS_RANDOM.VALUE(low, high) -> (low + random()*(high-low)) / RAND()*(high-low)+low
   if (fromDb === 'oracle') {
+    // Handle DBMS_RANDOM.VALUE(low, high) with two args first
+    b = b.replace(/\bDBMS_RANDOM\.VALUE\s*\(\s*([^,)]+),\s*([^)]+)\)/gi, function(m, lo, hi) {
+      if (toDb === 'postgresql') return '(' + lo.trim() + ' + random() * (' + hi.trim() + ' - ' + lo.trim() + '))';
+      return '(' + lo.trim() + ' + RAND() * (' + hi.trim() + ' - ' + lo.trim() + '))';
+    });
+    // Then handle no-arg DBMS_RANDOM.VALUE
     if (toDb === 'postgresql') b = b.replace(/\bDBMS_RANDOM\.VALUE\b/gi, 'random()');
     else if (toDb === 'mysql') b = b.replace(/\bDBMS_RANDOM\.VALUE\b/gi, 'RAND()');
   } else if (fromDb === 'mysql') {
@@ -3250,10 +3563,25 @@ function transformBody(body, fromDb, toDb) {
   // SQL%ROWCOUNT / ROW_COUNT()
   if (fromDb === 'oracle') {
     if (toDb === 'mysql') b = b.replace(/\bSQL%ROWCOUNT\b/gi, 'ROW_COUNT()');
-    else if (toDb === 'postgresql') b = b.replace(/\bSQL%ROWCOUNT\b/gi, '/* [注意: PG 请使用 GET DIAGNOSTICS v_cnt = ROW_COUNT;] */ SQL%ROWCOUNT');
+    else if (toDb === 'postgresql') {
+      // PG uses GET DIAGNOSTICS to retrieve row count
+      // Replace assignment lines like: VAR := VAR + SQL%ROWCOUNT; with GET DIAGNOSTICS + assignment
+      b = b.replace(/^(\s*)(\w+)\s*:=\s*(.*?)\bSQL%ROWCOUNT\b(.*?)\s*;/gim, function(m, indent, varName, before, after) {
+        return indent + 'GET DIAGNOSTICS _pg_rowcount = ROW_COUNT;\n' + indent + varName + ' := ' + before + '_pg_rowcount' + after + ';';
+      });
+      // Handle standalone SQL%ROWCOUNT references
+      b = b.replace(/\bSQL%ROWCOUNT\b/gi, '_pg_rowcount /* GET DIAGNOSTICS _pg_rowcount = ROW_COUNT */');
+    }
   } else if (fromDb === 'mysql') {
     if (toDb === 'oracle') b = b.replace(/\bROW_COUNT\s*\(\s*\)/gi, 'SQL%ROWCOUNT');
     else if (toDb === 'postgresql') b = b.replace(/\bROW_COUNT\s*\(\s*\)/gi, '/* [注意: PG 请使用 GET DIAGNOSTICS v_cnt = ROW_COUNT;] */ ROW_COUNT()');
+  } else if (fromDb === 'postgresql') {
+    if (toDb === 'mysql') {
+      // PG GET DIAGNOSTICS var = ROW_COUNT -> MySQL SET var = ROW_COUNT()
+      b = b.replace(/\bGET\s+DIAGNOSTICS\s+(\w+)\s*=\s*ROW_COUNT\s*;/gi, 'SET $1 = ROW_COUNT();');
+    } else if (toDb === 'oracle') {
+      b = b.replace(/\bGET\s+DIAGNOSTICS\s+(\w+)\s*=\s*ROW_COUNT\s*;/gi, '$1 := SQL%ROWCOUNT;');
+    }
   }
 
   // ELSIF <-> ELSEIF
@@ -3335,20 +3663,40 @@ function transformBody(body, fromDb, toDb) {
     // Convert WHILE...LOOP to WHILE...DO and track which END LOOPs need END WHILE
     const lines = b.split('\n');
     const loopStack = []; // track loop types
+    var basicLoopCount = 0;
     for (let li = 0; li < lines.length; li++) {
+      // Skip comment lines to avoid false matches
+      if (/^\s*--/.test(lines[li])) continue;
       if (/\bWHILE\b.+\bLOOP\b/i.test(lines[li])) {
         lines[li] = lines[li].replace(/\bWHILE\b(.+?)\bLOOP\b/gi, 'WHILE$1DO');
         loopStack.push('while');
       } else if (/\bFOR\b.+\bLOOP\b/i.test(lines[li])) {
-        loopStack.push('for'); // FOR loops become WHILE in earlier conversion
-      } else if (/^\s*LOOP\b/i.test(lines[li])) {
-        loopStack.push('basic');
+        // Distinguish numeric FOR (has ..) from query FOR (has SELECT or parens)
+        if (/\bFOR\s+\w+\s+IN\s+\S+?\s*\.\./i.test(lines[li])) {
+          loopStack.push('for'); // numeric FOR -> becomes WHILE
+        } else {
+          loopStack.push('query_for'); // query FOR -> becomes cursor LOOP
+        }
+      } else if (/^\s*(?:\w+\s*:\s*)?LOOP\b/i.test(lines[li])) {
+        basicLoopCount++;
+        var loopLabel = '_loop' + basicLoopCount;
+        // Only add label if not already labeled
+        if (/^\s*\w+\s*:\s*LOOP\b/i.test(lines[li])) {
+          var existingLabel = lines[li].match(/^\s*(\w+)\s*:/)[1];
+          loopStack.push({ type: 'basic', label: existingLabel });
+        } else {
+          lines[li] = lines[li].replace(/\bLOOP\b/i, loopLabel + ': LOOP');
+          loopStack.push({ type: 'basic', label: loopLabel });
+        }
       } else if (/\bEND\s+LOOP\b/i.test(lines[li])) {
         const loopType = loopStack.pop();
         if (loopType === 'while' || loopType === 'for') {
           lines[li] = lines[li].replace(/\bEND\s+LOOP\b/gi, 'END WHILE');
+        } else if (loopType === 'query_for') {
+          lines[li] = lines[li].replace(/\bEND\s+LOOP\b/gi, 'END LOOP _for_loop');
+        } else if (loopType && loopType.type === 'basic') {
+          lines[li] = lines[li].replace(/\bEND\s+LOOP\b/gi, 'END LOOP ' + loopType.label);
         }
-        // basic loops keep END LOOP (MySQL supports it)
       }
     }
     b = lines.join('\n');
@@ -3381,15 +3729,25 @@ function transformBody(body, fromDb, toDb) {
 
   // Cursor attributes: %NOTFOUND, %FOUND, %ISOPEN, %ROWCOUNT, %ROWTYPE
   if (fromDb === 'oracle') {
+    // Convert IF cursor%ISOPEN THEN CLOSE cursor; END IF; to safe close
+    if (toDb === 'postgresql') {
+      b = b.replace(/\bIF\s+(\w+)%ISOPEN\s+THEN\s+CLOSE\s+\1\s*;\s*END\s+IF\s*;/gi, 'BEGIN CLOSE $1; EXCEPTION WHEN OTHERS THEN NULL; END;');
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bIF\s+(\w+)%ISOPEN\s+THEN\s+CLOSE\s+\1\s*;\s*END\s+IF\s*;/gi, '-- CLOSE $1 (safe close, MySQL has no %ISOPEN check)');
+    }
     if (toDb === 'postgresql') {
       b = b.replace(/\b(\w+)%NOTFOUND\b/gi, 'NOT FOUND');
       b = b.replace(/\b(\w+)%FOUND\b/gi, 'FOUND');
-      b = b.replace(/\b(\w+)%ISOPEN\b/gi, '/* $1 is open check */');
+      b = b.replace(/\b(\w+)%ISOPEN\b/gi, 'FALSE /* $1%ISOPEN not available in PG */');
       b = b.replace(/\b(\w+)%ROWTYPE\b/gi, 'RECORD');
     } else if (toDb === 'mysql') {
       // MySQL uses a handler variable for NOT FOUND
-      b = b.replace(/\b(\w+)%NOTFOUND\b/gi, 'done');
-      b = b.replace(/\b(\w+)%FOUND\b/gi, 'NOT done');
+      if (/\w+%NOTFOUND\b/i.test(b)) {
+        // Add done variable and handler at top of body
+        b = 'DECLARE _done INT DEFAULT 0;\nDECLARE CONTINUE HANDLER FOR NOT FOUND SET _done = 1;\n' + b;
+      }
+      b = b.replace(/\b(\w+)%NOTFOUND\b/gi, '_done');
+      b = b.replace(/\b(\w+)%FOUND\b/gi, 'NOT _done');
       b = b.replace(/\b(\w+)%ISOPEN\b/gi, '/* [注意: MySQL 无 %ISOPEN] */');
       b = b.replace(/\b(\w+)%ROWCOUNT\b/gi, 'ROW_COUNT()');
       b = b.replace(/\b(\w+)%ROWTYPE\b/gi, '/* [注意: MySQL 无 %ROWTYPE, 请改用独立变量] */');
@@ -3406,44 +3764,111 @@ function transformBody(body, fromDb, toDb) {
 
   // Numeric FOR loop: Oracle/PG "FOR i IN 1..10 LOOP...END LOOP" -> MySQL WHILE
   if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
-    b = b.replace(/\bFOR\s+(\w+)\s+IN\s+(\S+?)\s*\.\.\s*(\S+?)\s+LOOP\b/gi, function(m, varName, startVal, endVal) {
-      return 'SET ' + varName + ' = ' + startVal + ';\n  WHILE ' + varName + ' <= ' + endVal + ' DO';
+    b = b.replace(/(^|\n)(\s*)FOR\s+(\w+)\s+IN\s+(\S+?)\s*\.\.\s*(.+?)\s+LOOP\b/gi, function(m, pre, indent, varName, startVal, endVal) {
+      return pre + indent + 'DECLARE ' + varName + ' INT DEFAULT ' + startVal + ';\n' + indent + 'WHILE ' + varName + ' <= ' + endVal + ' DO';
     });
-    // Add increment before the END LOOP that corresponds to a FOR-converted WHILE
-    // This is hard to do perfectly with regex, so add a comment
   }
   // MySQL WHILE back to FOR (reverse)
   // This is complex to reverse, skip for now
 
   // Query FOR loop: Oracle "FOR r IN (SELECT...) LOOP...END LOOP" -> MySQL cursor + WHILE
   if (fromDb === 'oracle' && toDb === 'mysql') {
-    b = b.replace(/\bFOR\s+(\w+)\s+IN\s*\(([\s\S]*?)\)\s*LOOP\b/gi, function(m, recVar, query) {
-      return '-- [注意: MySQL 无查询 FOR 循环, 请改为显式游标]\n  -- 原始: FOR ' + recVar + ' IN (' + query.trim() + ') LOOP\n  BLOCK_FOR_CURSOR: BEGIN\n  DECLARE _done INT DEFAULT 0;\n  DECLARE _cur CURSOR FOR ' + query.trim() + ';\n  DECLARE CONTINUE HANDLER FOR NOT FOUND SET _done = 1;\n  OPEN _cur;\n  _for_loop: LOOP\n    FETCH _cur INTO ' + recVar + ';\n    IF _done THEN LEAVE _for_loop; END IF;';
+    var _forLoopRecVars = [];
+    b = b.replace(/(^|\n)(\s*)FOR\s+(\w+)\s+IN\s*\(([\s\S]*?)\)\s*LOOP\b/gi, function(m, pre, indent, recVar, query) {
+      // Collapse query to single line to avoid breaking DECLARE CURSOR parsing
+      var q = query.trim().replace(/\s*\n\s*/g, ' ');
+      // Extract column names from SELECT...FROM to declare individual variables
+      var selectMatch = q.match(/^\s*SELECT\s+([\s\S]+?)\s+FROM\s/i);
+      var colNames = [];
+      if (selectMatch) {
+        var colParts = selectMatch[1].split(',');
+        for (var ci = 0; ci < colParts.length; ci++) {
+          var colExpr = colParts[ci].trim();
+          var aliasMatch = colExpr.match(/\bAS\s+(\w+)\s*$/i);
+          if (aliasMatch) {
+            colNames.push(aliasMatch[1]);
+          } else {
+            var lastWord = colExpr.match(/(\w+)\s*$/);
+            if (lastWord) colNames.push(lastWord[1]);
+          }
+        }
+      }
+      var declares = '';
+      var fetchVars = recVar;
+      if (colNames.length > 0) {
+        for (var ci = 0; ci < colNames.length; ci++) {
+          declares += indent + 'DECLARE _rec_' + colNames[ci] + ' VARCHAR(4000);\n';
+        }
+        fetchVars = colNames.map(function(c) { return '_rec_' + c; }).join(', ');
+        _forLoopRecVars.push({ recVar: recVar, colNames: colNames });
+      }
+      return pre + declares + indent + 'DECLARE _done INT DEFAULT 0;\n' + indent + 'DECLARE _cur CURSOR FOR ' + q + ';\n' + indent + 'DECLARE CONTINUE HANDLER FOR NOT FOUND SET _done = 1;\n' + indent + 'OPEN _cur;\n' + indent + '_for_loop: LOOP\n' + indent + '  FETCH _cur INTO ' + fetchVars + ';\n' + indent + '  IF _done THEN LEAVE _for_loop; END IF;';
     });
-    // The corresponding END LOOP needs to become: END LOOP; CLOSE _cur; END;
-    // This is hard to match precisely, so we'll rely on the general END LOOP conversion
+    // Replace recVar.colName references with _rec_colName
+    for (var ri = 0; ri < _forLoopRecVars.length; ri++) {
+      var rv = _forLoopRecVars[ri];
+      for (var ci = 0; ci < rv.colNames.length; ci++) {
+        b = b.replace(new RegExp('\\b' + rv.recVar + '\\.' + rv.colNames[ci] + '\\b', 'gi'), '_rec_' + rv.colNames[ci]);
+      }
+    }
   }
   // Oracle query FOR -> PG: slight syntax difference
   if (fromDb === 'oracle' && toDb === 'postgresql') {
     // Oracle: FOR r IN (SELECT...) LOOP -> PG: FOR r IN SELECT... LOOP (no outer parens needed)
-    b = b.replace(/\bFOR\s+(\w+)\s+IN\s*\(([\s\S]*?)\)\s*LOOP\b/gi, 'FOR $1 IN $2 LOOP');
+    b = b.replace(/(^|\n)(\s*)FOR\s+(\w+)\s+IN\s*\(([\s\S]*?)\)\s*LOOP\b/gi, '$1$2FOR $3 IN $4 LOOP');
+  }
+
+  // PG query FOR loop -> MySQL cursor
+  if (fromDb === 'postgresql' && toDb === 'mysql') {
+    var _forLoopRecVarsPG = [];
+    // PG: FOR rec IN SELECT ... LOOP (no parens around query, query ends at LOOP)
+    b = b.replace(/(^|\n)(\s*)FOR\s+(\w+)\s+IN\s+(SELECT\s+[\s\S]*?)\s+LOOP\b/gi, function(m, pre, indent, recVar, query) {
+      var q = query.trim().replace(/\s*\n\s*/g, ' ');
+      var selectMatch = q.match(/^\s*SELECT\s+([\s\S]+?)\s+FROM\s/i);
+      var colNames = [];
+      if (selectMatch) {
+        var colParts = selectMatch[1].split(',');
+        for (var ci = 0; ci < colParts.length; ci++) {
+          var colExpr = colParts[ci].trim();
+          var aliasMatch = colExpr.match(/\bAS\s+(\w+)\s*$/i);
+          if (aliasMatch) colNames.push(aliasMatch[1]);
+          else { var lw = colExpr.match(/(\w+)\s*$/); if (lw) colNames.push(lw[1]); }
+        }
+      }
+      var declares = '';
+      var fetchVars = recVar;
+      if (colNames.length > 0) {
+        for (var ci = 0; ci < colNames.length; ci++) declares += indent + 'DECLARE _rec_' + colNames[ci] + ' VARCHAR(4000);\n';
+        fetchVars = colNames.map(function(c) { return '_rec_' + c; }).join(', ');
+        _forLoopRecVarsPG.push({ recVar: recVar, colNames: colNames });
+      }
+      return pre + declares + indent + 'DECLARE _done INT DEFAULT 0;\n' + indent + 'DECLARE _cur CURSOR FOR ' + q + ';\n' + indent + 'DECLARE CONTINUE HANDLER FOR NOT FOUND SET _done = 1;\n' + indent + 'OPEN _cur;\n' + indent + '_for_loop: LOOP\n' + indent + '  FETCH _cur INTO ' + fetchVars + ';\n' + indent + '  IF _done THEN LEAVE _for_loop; END IF;';
+    });
+    for (var ri = 0; ri < _forLoopRecVarsPG.length; ri++) {
+      var rv = _forLoopRecVarsPG[ri];
+      for (var ci = 0; ci < rv.colNames.length; ci++) {
+        b = b.replace(new RegExp('\\b' + rv.recVar + '\\.' + rv.colNames[ci] + '\\b', 'gi'), '_rec_' + rv.colNames[ci]);
+      }
+    }
   }
 
   // MERGE INTO -> MySQL INSERT...ON DUPLICATE KEY UPDATE
   if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
-    b = b.replace(/\bMERGE\s+INTO\s+(\S+)\s+(\w+)\s*\n?\s*USING\s+(\S+)\s+(\w+)\s+ON\s*\(([^)]+)\)\s*\n?\s*WHEN\s+MATCHED\s+THEN\s+UPDATE\s+SET\s+([\s\S]*?)\s*\n?\s*WHEN\s+NOT\s+MATCHED\s+THEN\s+INSERT\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)\s*;/gi,
-      function(m, tgt, tgtAlias, src, srcAlias, onCond, updateSet, insertCols, insertVals) {
-        // Clean up: remove table alias prefixes
+    // Use paren-aware capture for INSERT(...) and VALUES(...)
+    var parenContent = '((?:[^()]+|\\([^)]*\\))*)'; // allows one level of nested parens like NOW()
+    var mergeReStr = '\\bMERGE\\s+INTO\\s+(\\S+)\\s+(\\w+)\\s*\\n?\\s*USING\\s*\\(([\\s\\S]*?)\\)\\s+(\\w+)\\s+ON\\s*\\(?([^)\\n]+?)\\)?\\s*\\n?\\s*WHEN\\s+MATCHED\\s+THEN\\s+UPDATE\\s+SET\\s+([\\s\\S]*?)\\s*\\n?\\s*WHEN\\s+NOT\\s+MATCHED\\s+THEN\\s+INSERT\\s*\\(' + parenContent + '\\)\\s*VALUES\\s*\\(' + parenContent + '\\)\\s*;';
+    var mergeRe = new RegExp(mergeReStr, 'gi');
+    b = b.replace(mergeRe,
+      function(m, tgt, tgtAlias, subquery, srcAlias, onCond, updateSet, insertCols, insertVals) {
         let cleanUpdate = updateSet.trim().replace(new RegExp('\\b' + tgtAlias + '\\.', 'gi'), '').replace(new RegExp('\\b' + srcAlias + '\\.', 'gi'), '');
         let cleanVals = insertVals.trim().replace(new RegExp('\\b' + srcAlias + '\\.', 'gi'), '');
         let cleanCols = insertCols.trim().replace(new RegExp('\\b' + tgtAlias + '\\.', 'gi'), '').replace(new RegExp('\\b' + srcAlias + '\\.', 'gi'), '');
-        // Build ON DUPLICATE KEY UPDATE clause from the UPDATE SET part
         let updateParts = cleanUpdate.split(',').map(function(p) {
           let parts = p.trim().split(/\s*=\s*/);
           if (parts.length === 2) return parts[0].trim() + ' = VALUES(' + parts[0].trim() + ')';
           return p.trim();
         });
-        return 'INSERT INTO ' + tgt + ' (' + cleanCols + ')\nSELECT ' + cleanVals + '\n  FROM ' + src + '\nON DUPLICATE KEY UPDATE\n  ' + updateParts.join(',\n  ') + ';';
+        return 'INSERT INTO ' + tgt + ' (' + cleanCols + ')\nSELECT ' + cleanVals + '\n  FROM (' + subquery.trim() + ') ' + srcAlias + '\nON DUPLICATE KEY UPDATE\n  ' + updateParts.join(',\n  ') + ';';
       });
   }
 
@@ -3456,39 +3881,11 @@ function transformBody(body, fromDb, toDb) {
     }
   }
 
-  // EXIT WHEN -> MySQL IF...LEAVE
+  // EXIT WHEN -> MySQL IF...LEAVE (label will be added by LOOP conversion)
   if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
     b = b.replace(/\bEXIT\s+WHEN\s+(.+?)\s*;/gi, 'IF $1 THEN\n    LEAVE;\n  END IF;');
-  }
-
-  // RAISE_APPLICATION_ERROR -> RAISE EXCEPTION / SIGNAL
-  if (fromDb === 'oracle') {
-    if (toDb === 'postgresql') {
-      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*'([^']*)'\s*\)\s*;/gi, "RAISE EXCEPTION '$1' USING ERRCODE = 'P0001';");
-      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*([^)]+)\)\s*;/gi, "RAISE EXCEPTION '%', $1 USING ERRCODE = 'P0001';");
-    } else if (toDb === 'mysql') {
-      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*'([^']*)'\s*\)\s*;/gi, "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '$1';");
-      b = b.replace(/\bRAISE_APPLICATION_ERROR\s*\(\s*[^,]+,\s*([^)]+)\)\s*;/gi, "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = $1;");
-    }
-  } else if (fromDb === 'postgresql') {
-    if (toDb === 'oracle') {
-      b = b.replace(/\bRAISE\s+EXCEPTION\s+'([^']*)'\s*(?:USING\s+[^;]+)?\s*;/gi, "RAISE_APPLICATION_ERROR(-20001, '$1');");
-    } else if (toDb === 'mysql') {
-      b = b.replace(/\bRAISE\s+EXCEPTION\s+'([^']*)'\s*(?:USING\s+[^;]+)?\s*;/gi, "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '$1';");
-    }
-  } else if (fromDb === 'mysql') {
-    if (toDb === 'oracle') {
-      b = b.replace(/\bSIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']*)'\s*;/gi, "RAISE_APPLICATION_ERROR(-20001, '$1');");
-    } else if (toDb === 'postgresql') {
-      b = b.replace(/\bSIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']*)'\s*;/gi, "RAISE EXCEPTION '$1' USING ERRCODE = 'P0001';");
-    }
-  }
-
-  // RAISE; (re-throw) <-> RESIGNAL;
-  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
-    b = b.replace(/\bRAISE\s*;/gi, 'RESIGNAL;');
-  } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
-    b = b.replace(/\bRESIGNAL\s*;/gi, 'RAISE;');
+    // Fix LEAVE without label - add _loop1 for basic cursor loops
+    b = b.replace(/\bLEAVE\s*;/gi, 'LEAVE _loop1;');
   }
 
   // INITCAP (Oracle/PG -> MySQL: no native equivalent)
@@ -3536,6 +3933,76 @@ function transformBody(body, fromDb, toDb) {
   } else if (fromDb === 'mysql' && toDb === 'postgresql') {
     b = b.replace(/\b@_err_msg\b/g, 'SQLERRM');
     b = b.replace(/\b@_err_code\b/g, 'SQLSTATE');
+  }
+
+  // PG -> MySQL: <<label>> LOOP -> label: LOOP
+  if (fromDb === 'postgresql' && toDb === 'mysql') {
+    b = b.replace(/<<(\w+)>>\s*LOOP\b/gi, '$1: LOOP');
+    // NOT FOUND handling: add done variable and handler, convert IF NOT FOUND conditions
+    if (/\bNOT\s+FOUND\b/i.test(b) && !/\bDECLARE\s+_done\b/i.test(b)) {
+      b = 'DECLARE _done INT DEFAULT 0;\nDECLARE CONTINUE HANDLER FOR NOT FOUND SET _done = 1;\n' + b;
+    }
+    b = b.replace(/\bIF\s+NOT\s+FOUND\s+THEN\b/gi, 'IF _done THEN');
+    b = b.replace(/\bEXIT\s+WHEN\s+NOT\s+FOUND\s*;/gi, 'IF _done THEN\n    LEAVE;\n  END IF;');
+  }
+
+  // PG -> MySQL/Oracle: GET STACKED DIAGNOSTICS ... = PG_EXCEPTION_CONTEXT
+  if (fromDb === 'postgresql') {
+    b = b.replace(/\bGET\s+STACKED\s+DIAGNOSTICS\s+\w+\s*=\s*PG_EXCEPTION_CONTEXT\s*;/gi, '');
+  }
+
+  // MySQL -> PG/Oracle: CAST AS SIGNED/UNSIGNED -> CAST AS INTEGER
+  if (fromDb === 'mysql' && (toDb === 'postgresql' || toDb === 'oracle')) {
+    b = b.replace(/\bAS\s+SIGNED\s+INTEGER\b/gi, 'AS INTEGER');
+    b = b.replace(/\bAS\s+SIGNED\b/gi, 'AS INTEGER');
+    b = b.replace(/\bAS\s+UNSIGNED\s+INTEGER\b/gi, 'AS INTEGER');
+    b = b.replace(/\bAS\s+UNSIGNED\b/gi, 'AS INTEGER');
+  }
+
+  // MySQL -> PG: LEAVE label -> EXIT label
+  if (fromDb === 'mysql' && toDb === 'postgresql') {
+    // Convert MySQL label: LOOP to PG <<label>> LOOP
+    b = b.replace(/^\s*(\w+)\s*:\s*LOOP\b/gim, '    <<$1>> LOOP');
+    b = b.replace(/\bLEAVE\s+(\w+)\s*;/gi, 'EXIT $1;');
+    b = b.replace(/\bLEAVE\s*;/gi, 'EXIT;');
+  }
+
+  // MySQL -> PG: INSERT...ON DUPLICATE KEY UPDATE -> INSERT...ON CONFLICT DO UPDATE
+  if (fromDb === 'mysql' && toDb === 'postgresql') {
+    b = b.replace(/^(\s*)ON\s+DUPLICATE\s+KEY\s+UPDATE\b([\s\S]*?)(?=;)/gim, function(m, indent, updateClause) {
+      // Convert VALUES(col) -> EXCLUDED.col
+      var converted = updateClause.replace(/\bVALUES\s*\(\s*(\w+)\s*\)/gi, 'EXCLUDED.$1');
+      return indent + 'ON CONFLICT DO UPDATE SET' + converted;
+    });
+  }
+
+  // MySQL -> PG: INSERT IGNORE INTO -> INSERT INTO ... ON CONFLICT DO NOTHING
+  if (fromDb === 'mysql' && toDb === 'postgresql') {
+    b = b.replace(/\bINSERT\s+IGNORE\s+INTO\b/gi, 'INSERT INTO');
+    // Add ON CONFLICT DO NOTHING before the semicolon of INSERT IGNORE statements
+    // This is a simplistic approach - may need refinement for complex queries
+    b = b.replace(/(\bINSERT\s+INTO\b[\s\S]*?)(;)/gi, function(m, insertPart, semi) {
+      if (/\bON\s+CONFLICT\b/i.test(insertPart)) return m; // already has ON CONFLICT
+      if (/\bON\s+DUPLICATE\b/i.test(insertPart)) return m; // already handled above
+      // Only add ON CONFLICT DO NOTHING if this was originally an INSERT IGNORE
+      return m; // Don't add automatically since we can't know which INSERTs were IGNORE
+    });
+  }
+
+  // MySQL -> PG: START TRANSACTION -> (remove, PG procedures manage transactions with COMMIT/ROLLBACK)
+  if (fromDb === 'mysql' && toDb === 'postgresql') {
+    b = b.replace(/^\s*START\s+TRANSACTION\s*;/gim, '');
+  }
+
+  // MySQL -> PG: CURRENT_TIMESTAMP(6) -> CLOCK_TIMESTAMP()
+  if (fromDb === 'mysql' && toDb === 'postgresql') {
+    b = b.replace(/\bCURRENT_TIMESTAMP\s*\(\s*\d*\s*\)/gi, 'CLOCK_TIMESTAMP()');
+  }
+
+  // MySQL -> PG: IF _done THEN LEAVE ... -> EXIT WHEN NOT FOUND (simplify cursor loops)
+  if (fromDb === 'mysql' && toDb === 'postgresql') {
+    b = b.replace(/\bIF\s+(?:v_done|_done)\s+(?:=\s*1\s+)?THEN\s+EXIT\s+\w+\s*;\s*END\s+IF\s*;/gi, 'EXIT WHEN NOT FOUND;');
+    b = b.replace(/\bIF\s+(?:v_done|_done)\s+THEN\s+EXIT\s*;\s*END\s+IF\s*;/gi, 'EXIT WHEN NOT FOUND;');
   }
 
   return b;
@@ -3672,9 +4139,9 @@ function _convertSingleFunction(input, sourceDb, targetDb) {
 /* --- Function parsers --- */
 
 function _parseOracleFunction(input) {
-  let src = input.replace(/\n\s*\/\s*$/, '').trim();
+  let src = input.replace(/\s*\/\s*$/, '').trim();
   // Strip trailing comments after the function body
-  src = src.replace(/(\bEND\b\s*\w*\s*;?\s*(?:\/\s*)?)\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
+  src = src.replace(/(\bEND\b\s*\w*\s*;?)\s*(?:\/\s*)?\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
   // Find CREATE FUNCTION name( handling nested parens in params
   const prefixRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(\w+)\s*\(/i;
   const pm = src.match(prefixRe);
@@ -3746,6 +4213,12 @@ function _parseMySQLFunction(input) {
   const bodyContent = bodyMatch[1];
   const vars = [], bodyLines = bodyContent.split('\n'), nonDeclLines = [];
   for (let i = 0; i < bodyLines.length; i++) {
+    // Skip DECLARE HANDLER and DECLARE CURSOR lines (keep in body for transformBody)
+    if (/^\s*DECLARE\s+(EXIT|CONTINUE)\s+HANDLER\b/i.test(bodyLines[i]) ||
+        /^\s*DECLARE\s+\w+\s+CURSOR\b/i.test(bodyLines[i])) {
+      nonDeclLines.push(bodyLines[i]);
+      continue;
+    }
     const declMatch = bodyLines[i].match(/^\s*DECLARE\s+(\w+)\s+(.+?)(?:\s+DEFAULT\s+(.+?))?\s*;\s*$/i);
     if (declMatch) {
       vars.push({ name: declMatch[1], type: declMatch[2].trim(), defaultVal: declMatch[3] ? declMatch[3].trim() : null });
@@ -3793,6 +4266,12 @@ function _parsePGFunction(input) {
     for (let i = 0; i < declParts.length; i++) {
       const s = declParts[i].trim();
       if (!s) continue;
+      // Check for cursor declaration: name CURSOR FOR query
+      const cursorMatch = s.match(/^(\w+)\s+CURSOR\s+FOR\s+([\s\S]+)$/i);
+      if (cursorMatch) {
+        vars.push({ name: cursorMatch[1], cursor: true, query: cursorMatch[2].trim(), type: 'CURSOR' });
+        continue;
+      }
       const vm = s.match(/^(\w+)\s+(.+?)(?:\s*:=\s*(.+))?$/i);
       if (vm) vars.push({ name: vm[1], type: vm[2].trim(), defaultVal: vm[3] ? vm[3].trim() : null });
     }
@@ -3898,13 +4377,25 @@ function _genMySQLFunction(name, params, returnType, vars, body) {
     }
   }
   if (bodyDeclares.length > 0) {
+    // Sort: variables first, cursors second, handlers last (MySQL requirement)
+    bodyDeclares.sort(function(a, b) {
+      var aIsHandler = /^\s*DECLARE\s+(EXIT|CONTINUE)\s+HANDLER/i.test(a);
+      var bIsHandler = /^\s*DECLARE\s+(EXIT|CONTINUE)\s+HANDLER/i.test(b);
+      var aIsCursor = /^\s*DECLARE\s+\w+\s+CURSOR\b/i.test(a);
+      var bIsCursor = /^\s*DECLARE\s+\w+\s+CURSOR\b/i.test(b);
+      var aOrder = aIsHandler ? 2 : (aIsCursor ? 1 : 0);
+      var bOrder = bIsHandler ? 2 : (bIsCursor ? 1 : 0);
+      return aOrder - bOrder;
+    });
     out += bodyDeclares.join('\n') + '\n';
   }
   out += bodyOther.join('\n') + '\n';
   // Ensure it ends with END$$
   out = out.replace(/\s+$/, '\n');
-  // Remove any trailing END with name, normalize to just END
-  out = out.replace(/\bEND\b\s*\w*\s*;\s*(?:\/\s*)?$/i, '');
+  // Remove any trailing END with name (not inside comments), normalize
+  // First strip trailing comment-only lines
+  out = out.replace(/(\n\s*--[^\n]*)+\s*$/g, '\n');
+  out = out.replace(/\bEND\b\s*\w*\s*;\s*(?:\/\s*)?\s*$/i, '');
   out += 'END$$\n';
   out += 'DELIMITER ;';
   return out;
@@ -3920,7 +4411,24 @@ function _genPGFunction(name, params, returnType, vars, body) {
     return line;
   });
   out += pLines.join(',\n') + ')\nRETURNS ' + returnType + '\nLANGUAGE plpgsql\nAS $$\n';
-  if (vars.length > 0) {
+  // Detect FOR loop variables that need RECORD declarations
+  var forVarRe = /\bFOR\s+(\w+)\s+IN\b/gi;
+  var forVarMatch, forVarNames = [];
+  while ((forVarMatch = forVarRe.exec(body)) !== null) {
+    var fvn = forVarMatch[1].toUpperCase();
+    // Skip numeric FOR (already has a counter variable, not a record)
+    var afterFor = body.substring(forVarMatch.index + forVarMatch[0].length, forVarMatch.index + forVarMatch[0].length + 20);
+    if (/^\s*\d/.test(afterFor) || /^\s*REVERSE\b/i.test(afterFor)) continue;
+    if (forVarNames.indexOf(fvn) < 0) forVarNames.push(fvn);
+  }
+  // Extract cursor declarations from body and move to DECLARE section (for MySQL->PG)
+  var cursorDecls = [];
+  body = body.replace(/(^|\n)\s*(\w+)\s+CURSOR\s+FOR\s+([\s\S]*?);/gim, function(m, pre, curName, curQuery) {
+    cursorDecls.push({ name: curName, query: curQuery.trim() });
+    return pre;
+  });
+  var needsDeclare = vars.length > 0 || body.indexOf('_pg_rowcount') >= 0 || forVarNames.length > 0 || cursorDecls.length > 0;
+  if (needsDeclare) {
     out += 'DECLARE\n';
     for (let i = 0; i < vars.length; i++) {
       const v = vars[i];
@@ -3930,13 +4438,28 @@ function _genPGFunction(name, params, returnType, vars, body) {
       if (v.defaultVal) out += ' := ' + v.defaultVal;
       out += ';\n';
     }
+    for (var ci = 0; ci < cursorDecls.length; ci++) {
+      out += '  ' + cursorDecls[ci].name + ' CURSOR FOR ' + cursorDecls[ci].query + ';\n';
+    }
+    if (body.indexOf('_pg_rowcount') >= 0) out += '  _pg_rowcount BIGINT;\n';
+    for (var fi = 0; fi < forVarNames.length; fi++) {
+      // Only add if not already declared
+      var alreadyDeclared = vars.some(function(v) { return v.name && v.name.toUpperCase() === forVarNames[fi]; });
+      if (!alreadyDeclared) out += '  ' + forVarNames[fi] + ' RECORD;\n';
+    }
   }
   let cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '');
   cleanBody = cleanBody.replace(/^\s*BEGIN\b/i, '');
   out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
-  if (!/\bEND\b/i.test(out.split('BEGIN').pop())) out += 'END;\n';
-  else out = out.replace(/\bEND\b\s*\w*\s*;?\s*$/i, 'END;\n');
-  out = out.replace(/\s+$/, '') + '\n$$;';
+  // Ensure the function body ends with END; before $$;
+  var trimmedOut = out.replace(/\s+$/, '');
+  if (/\bEND\s*;\s*$/i.test(trimmedOut)) {
+    out = trimmedOut + '\n$$;';
+  } else if (/\bEND\b\s*\w+\s*;\s*$/i.test(trimmedOut)) {
+    out = trimmedOut.replace(/\bEND\b\s*\w+\s*;?\s*$/i, 'END;') + '\n$$;';
+  } else {
+    out = trimmedOut + '\nEND;\n$$;';
+  }
   return out;
 }
 
@@ -3994,8 +4517,8 @@ function _convertSingleProcedure(input, sourceDb, targetDb) {
 /* --- Procedure parsers --- */
 
 function _parseOracleProcedure(input) {
-  let src = input.replace(/\n\s*\/\s*$/, '').trim();
-  src = src.replace(/(\bEND\b\s*\w*\s*;?\s*(?:\/\s*)?)\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
+  let src = input.replace(/\s*\/\s*$/, '').trim();
+  src = src.replace(/(\bEND\b\s*\w*\s*;?)\s*(?:\/\s*)?\s*(?:\n\s*--[^\n]*)*\s*$/i, '$1');
   // Try to find CREATE PROCEDURE name(
   const prefixRe = /CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(\w+)\s*\(/i;
   const pm = src.match(prefixRe);
@@ -4062,6 +4585,12 @@ function _parseMySQLProcedure(input) {
   const bodyContent = bodyMatch[1];
   const vars = [], bodyLines = bodyContent.split('\n'), nonDeclLines = [];
   for (let i = 0; i < bodyLines.length; i++) {
+    // Skip DECLARE HANDLER and DECLARE CURSOR lines (keep in body for transformBody)
+    if (/^\s*DECLARE\s+(EXIT|CONTINUE)\s+HANDLER\b/i.test(bodyLines[i]) ||
+        /^\s*DECLARE\s+\w+\s+CURSOR\b/i.test(bodyLines[i])) {
+      nonDeclLines.push(bodyLines[i]);
+      continue;
+    }
     const declMatch = bodyLines[i].match(/^\s*DECLARE\s+(\w+)\s+(.+?)(?:\s+DEFAULT\s+(.+?))?\s*;\s*$/i);
     if (declMatch) {
       vars.push({ name: declMatch[1], type: declMatch[2].trim(), defaultVal: declMatch[3] ? declMatch[3].trim() : null });
@@ -4106,6 +4635,12 @@ function _parsePGProcedure(input) {
     for (let i = 0; i < declParts.length; i++) {
       const s = declParts[i].trim();
       if (!s) continue;
+      // Check for cursor declaration: name CURSOR FOR query
+      const cursorMatch = s.match(/^(\w+)\s+CURSOR\s+FOR\s+([\s\S]+)$/i);
+      if (cursorMatch) {
+        vars.push({ name: cursorMatch[1], cursor: true, query: cursorMatch[2].trim(), type: 'CURSOR' });
+        continue;
+      }
       const vm = s.match(/^(\w+)\s+(.+?)(?:\s*:=\s*(.+))?$/i);
       if (vm) vars.push({ name: vm[1], type: vm[2].trim(), defaultVal: vm[3] ? vm[3].trim() : null });
     }
@@ -4159,18 +4694,23 @@ function _genMySQLProcedure(name, params, vars, body) {
     return '  ' + dir + ' ' + p.name + ' ' + p.type;
   });
   out += pLines.join(',\n') + ')\nBEGIN\n';
+  // Collect all declarations from vars
+  var allDeclares = [];
   for (let i = 0; i < vars.length; i++) {
     const v = vars[i];
-    if (v.raw) { out += '  ' + v.raw + '\n'; continue; }
-    if (v.cursor) { out += '  DECLARE ' + v.name + ' CURSOR FOR ' + v.query + ';\n'; continue; }
-    out += '  DECLARE ' + v.name + ' ' + v.type;
-    if (v.defaultVal) out += ' DEFAULT ' + v.defaultVal;
-    out += ';\n';
+    if (v.raw) {
+      allDeclares.push('  ' + v.raw);
+      continue;
+    }
+    if (v.cursor) { allDeclares.push('  DECLARE ' + v.name + ' CURSOR FOR ' + v.query + ';'); continue; }
+    var decl = '  DECLARE ' + v.name + ' ' + v.type;
+    if (v.defaultVal) decl += ' DEFAULT ' + v.defaultVal;
+    decl += ';';
+    allDeclares.push(decl);
   }
   let cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '').replace(/^\s*BEGIN\b/i, '');
   // MySQL requires all DECLARE at top of BEGIN block - extract DECLAREs from body
   // Handle DECLARE EXIT/CONTINUE HANDLER ... BEGIN...END; as a multi-line block
-  const bodyDeclares = [];
   const bodyOther = [];
   const bodyLines = cleanBody.replace(/^\n+/,'').split('\n');
   let inHandler = false;
@@ -4184,37 +4724,49 @@ function _genMySQLProcedure(name, params, vars, body) {
       if (/\bEND\b\s*;/i.test(line)) {
         handlerDepth--;
         if (handlerDepth <= 0) {
-          bodyDeclares.push(handlerLines.join('\n'));
+          allDeclares.push(handlerLines.join('\n'));
           handlerLines = [];
           inHandler = false;
         }
       }
     } else if (/^\s*DECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+/i.test(line)) {
-      // Check if single-line handler (no BEGIN block, ends with ;)
       if (/;\s*$/.test(line) && !/\bBEGIN\b/i.test(line)) {
-        bodyDeclares.push(line);
+        allDeclares.push(line);
       } else {
         inHandler = true;
         handlerDepth = 0;
         handlerLines = [line];
         if (/\bBEGIN\b/i.test(line)) handlerDepth++;
         if (/\bEND\b\s*;/i.test(line)) {
-          bodyDeclares.push(handlerLines.join('\n'));
+          allDeclares.push(handlerLines.join('\n'));
           handlerLines = [];
           inHandler = false;
         }
       }
     } else if (/^\s*DECLARE\s+/i.test(line)) {
-      bodyDeclares.push(line);
+      allDeclares.push(line);
     } else {
       bodyOther.push(line);
     }
   }
-  if (bodyDeclares.length > 0) {
-    out += bodyDeclares.join('\n') + '\n';
+  // MySQL requires: variable DECLAREs, then cursor DECLAREs, then handler DECLAREs
+  if (allDeclares.length > 0) {
+    allDeclares.sort(function(a, b) {
+      var aIsHandler = /DECLARE\s+(EXIT|CONTINUE)\s+HANDLER/i.test(a);
+      var bIsHandler = /DECLARE\s+(EXIT|CONTINUE)\s+HANDLER/i.test(b);
+      var aIsCursor = /DECLARE\s+\w+\s+CURSOR\b/i.test(a) || /\bCURSOR\s+\w+\s+IS\b/i.test(a);
+      var bIsCursor = /DECLARE\s+\w+\s+CURSOR\b/i.test(b) || /\bCURSOR\s+\w+\s+IS\b/i.test(b);
+      var aOrder = aIsHandler ? 2 : (aIsCursor ? 1 : 0);
+      var bOrder = bIsHandler ? 2 : (bIsCursor ? 1 : 0);
+      return aOrder - bOrder;
+    });
+    out += allDeclares.join('\n') + '\n';
   }
   out += bodyOther.join('\n') + '\n';
+  // Strip trailing comment-only lines
+  out = out.replace(/(\n\s*--[^\n]*)+\s*$/g, '\n');
   out = out.replace(/\s+$/, '\n');
+  // Strip trailing END name; (but not inside comments)
   out = out.replace(/\bEND\b\s*\w*\s*;\s*(?:\/\s*)?$/i, '');
   out += 'END$$\n';
   out += 'DELIMITER ;';
@@ -4222,8 +4774,20 @@ function _genMySQLProcedure(name, params, vars, body) {
 }
 
 function _genPGProcedure(name, params, vars, body) {
+  // PG requires OUT params not to appear after params with DEFAULT values
+  // Sort: params without default first, then OUT params, then params with default
+  var sortedParams = params.slice().sort(function(a, b) {
+    var aIsOut = (a.direction || '').toUpperCase() === 'OUT' || (a.direction || '').toUpperCase() === 'INOUT';
+    var bIsOut = (b.direction || '').toUpperCase() === 'OUT' || (b.direction || '').toUpperCase() === 'INOUT';
+    var aHasDefault = !!a.defaultVal;
+    var bHasDefault = !!b.defaultVal;
+    // Order: IN without default, OUT, IN with default
+    var aOrder = aIsOut ? 1 : (aHasDefault ? 2 : 0);
+    var bOrder = bIsOut ? 1 : (bHasDefault ? 2 : 0);
+    return aOrder - bOrder;
+  });
   let out = 'CREATE OR REPLACE PROCEDURE ' + name + '(\n';
-  const pLines = params.map(function(p) {
+  const pLines = sortedParams.map(function(p) {
     let line = '  ' + p.name;
     if (p.direction) line += ' ' + p.direction;
     line += ' ' + p.type;
@@ -4231,7 +4795,23 @@ function _genPGProcedure(name, params, vars, body) {
     return line;
   });
   out += pLines.join(',\n') + ')\nLANGUAGE plpgsql\nAS $$\n';
-  if (vars.length > 0) {
+  // Detect FOR loop variables that need RECORD declarations
+  var forVarRe = /\bFOR\s+(\w+)\s+IN\b/gi;
+  var forVarMatch, forVarNames = [];
+  while ((forVarMatch = forVarRe.exec(body)) !== null) {
+    var fvn = forVarMatch[1].toUpperCase();
+    var afterFor = body.substring(forVarMatch.index + forVarMatch[0].length, forVarMatch.index + forVarMatch[0].length + 20);
+    if (/^\s*\d/.test(afterFor) || /^\s*REVERSE\b/i.test(afterFor)) continue;
+    if (forVarNames.indexOf(fvn) < 0) forVarNames.push(fvn);
+  }
+  // Extract cursor declarations from body and move to DECLARE section (for MySQL->PG)
+  var cursorDecls = [];
+  body = body.replace(/(^|\n)\s*(\w+)\s+CURSOR\s+FOR\s+([\s\S]*?);/gim, function(m, pre, curName, curQuery) {
+    cursorDecls.push({ name: curName, query: curQuery.trim() });
+    return pre;
+  });
+  var needsDeclare = vars.length > 0 || body.indexOf('_pg_rowcount') >= 0 || forVarNames.length > 0 || cursorDecls.length > 0;
+  if (needsDeclare) {
     out += 'DECLARE\n';
     for (let i = 0; i < vars.length; i++) {
       const v = vars[i];
@@ -4241,13 +4821,27 @@ function _genPGProcedure(name, params, vars, body) {
       if (v.defaultVal) out += ' := ' + v.defaultVal;
       out += ';\n';
     }
+    for (var ci = 0; ci < cursorDecls.length; ci++) {
+      out += '  ' + cursorDecls[ci].name + ' CURSOR FOR ' + cursorDecls[ci].query + ';\n';
+    }
+    if (body.indexOf('_pg_rowcount') >= 0) out += '  _pg_rowcount BIGINT;\n';
+    for (var fi = 0; fi < forVarNames.length; fi++) {
+      var alreadyDeclared = vars.some(function(v) { return v.name && v.name.toUpperCase() === forVarNames[fi]; });
+      if (!alreadyDeclared) out += '  ' + forVarNames[fi] + ' RECORD;\n';
+    }
   }
   let cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '');
   cleanBody = cleanBody.replace(/^\s*BEGIN\b/i, '');
   out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
-  if (!/\bEND\b/i.test(out.split('BEGIN').pop())) out += 'END;\n';
-  else out = out.replace(/\bEND\b\s*\w*\s*;?\s*$/i, 'END;\n');
-  out = out.replace(/\s+$/, '') + '\n$$;';
+  // Ensure the procedure body ends with END; before $$;
+  var trimmedOut = out.replace(/\s+$/, '');
+  if (/\bEND\s*;\s*$/i.test(trimmedOut)) {
+    out = trimmedOut + '\n$$;';
+  } else if (/\bEND\b\s*\w+\s*;\s*$/i.test(trimmedOut)) {
+    out = trimmedOut.replace(/\bEND\b\s*\w+\s*;?\s*$/i, 'END;') + '\n$$;';
+  } else {
+    out = trimmedOut + '\nEND;\n$$;';
+  }
   return out;
 }
 
