@@ -942,516 +942,414 @@ COMMENT ON COLUMN t_log_data.log_msg IS '日志内容';`
 
 /* ===== FUNC SAMPLES ===== */
 const FUNC_SAMPLES = {
-oracle: `-- 字符串格式化: 姓名脱敏 (SUBSTR, ||, EXCEPTION)
-CREATE OR REPLACE FUNCTION FN_MASK_NAME(
-    P_NAME IN VARCHAR2
+oracle: `-- [1] String ops: SUBSTR, LENGTH, INSTR, REPLACE, LPAD, INITCAP, || concat
+-- [2] Date/null: TO_CHAR, TO_DATE, TRUNC(date,'MM'), ADD_MONTHS, SYSDATE, NVL, NVL2, DECODE
+-- [3] Exception: NO_DATA_FOUND, WHEN OTHERS, SQLERRM, SQLCODE, DBMS_OUTPUT.PUT_LINE
+CREATE OR REPLACE FUNCTION FN_FORMAT_CLIENT_LABEL(
+    P_CLIENT_NO  IN VARCHAR2,
+    P_AS_OF_DATE IN VARCHAR2 DEFAULT NULL
 ) RETURN VARCHAR2
 IS
-    V_RESULT VARCHAR2(200);
+    V_NAME     VARCHAR2(200);
+    V_STATUS   VARCHAR2(20);
+    V_JOINED   DATE;
+    V_LABEL    VARCHAR2(500);
+    V_DT       DATE;
+    V_POS      NUMBER;
 BEGIN
-    IF P_NAME IS NULL OR LENGTH(P_NAME) < 2 THEN
-        RETURN P_NAME;
-    END IF;
-    V_RESULT := SUBSTR(P_NAME, 1, 1) || LPAD('*', LENGTH(P_NAME) - 1, '*');
-    RETURN V_RESULT;
-EXCEPTION
-    WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('FN_MASK_NAME error: ' || SQLERRM);
-        RETURN P_NAME;
-END FN_MASK_NAME;
-/
-
--- 日期处理: 计算工作日差 (WHILE LOOP, NVL, TO_CHAR)
-CREATE OR REPLACE FUNCTION FN_WORKDAY_DIFF(
-    P_START_DATE IN DATE,
-    P_END_DATE   IN DATE
-) RETURN NUMBER
-IS
-    V_DAYS   NUMBER := 0;
-    V_CUR    DATE;
-BEGIN
-    V_CUR := TRUNC(NVL(P_START_DATE, SYSDATE));
-    WHILE V_CUR < NVL(P_END_DATE, SYSDATE) LOOP
-        IF TO_CHAR(V_CUR, 'DY', 'NLS_DATE_LANGUAGE=AMERICAN') NOT IN ('SAT','SUN') THEN
-            V_DAYS := V_DAYS + 1;
-        END IF;
-        V_CUR := V_CUR + 1;
-    END LOOP;
-    RETURN V_DAYS;
-EXCEPTION
-    WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('FN_WORKDAY_DIFF error: ' || SQLERRM);
-        RETURN -1;
-END FN_WORKDAY_DIFF;
-/
-
--- 查询带OUT参数: 获取客户余额与状态 (SELECT INTO, NO_DATA_FOUND)
-CREATE OR REPLACE FUNCTION FN_GET_CLIENT_BALANCE(
-    P_CLIENT_NO  IN  VARCHAR2,
-    P_STATUS     OUT VARCHAR2
-) RETURN NUMBER
-IS
-    V_BALANCE NUMBER(18,2);
-BEGIN
-    SELECT BALANCE, STATUS
-      INTO V_BALANCE, P_STATUS
+    -- TO_DATE, NVL, SYSDATE
+    V_DT := NVL(TO_DATE(P_AS_OF_DATE, 'YYYY-MM-DD'), SYSDATE);
+    -- SELECT INTO
+    SELECT CLIENT_NAME, STATUS, JOIN_DATE
+      INTO V_NAME, V_STATUS, V_JOINED
       FROM T_CLIENT_INFO
      WHERE CLIENT_NO = P_CLIENT_NO;
-    RETURN NVL(V_BALANCE, 0);
+    -- INITCAP, SUBSTR, LENGTH, INSTR, REPLACE
+    V_NAME := INITCAP(REPLACE(V_NAME, '_', ' '));
+    V_POS  := INSTR(V_NAME, ' ');
+    IF V_POS > 0 THEN
+        V_NAME := SUBSTR(V_NAME, 1, V_POS) || LPAD(SUBSTR(V_NAME, V_POS + 1, 1), 1) || '.';
+    END IF;
+    -- DECODE, NVL2, TO_CHAR, TRUNC, ADD_MONTHS, || concat
+    V_LABEL := V_NAME
+        || ' [' || DECODE(V_STATUS, 'ACTIVE', 'A', 'FROZEN', 'F', 'X') || ']'
+        || NVL2(V_JOINED, ' since ' || TO_CHAR(TRUNC(V_JOINED, 'MM'), 'YYYY-MM'), ' new')
+        || ' months=' || FLOOR(MONTHS_BETWEEN(V_DT, NVL(V_JOINED, ADD_MONTHS(V_DT, -1))));
+    RETURN V_LABEL;
 EXCEPTION
     WHEN NO_DATA_FOUND THEN
-        P_STATUS := 'NOT_FOUND';
-        RETURN 0;
+        DBMS_OUTPUT.PUT_LINE('Client not found: ' || P_CLIENT_NO);
+        RETURN NULL;
     WHEN OTHERS THEN
-        P_STATUS := 'ERROR';
-        DBMS_OUTPUT.PUT_LINE('FN_GET_CLIENT_BALANCE error: ' || SQLERRM);
-        RETURN -1;
-END FN_GET_CLIENT_BALANCE;
+        DBMS_OUTPUT.PUT_LINE('FN_FORMAT_CLIENT_LABEL err ' || SQLCODE || ': ' || SQLERRM);
+        RETURN NULL;
+END FN_FORMAT_CLIENT_LABEL;
 /
 
--- 动态SQL: 统计表行数 (EXECUTE IMMEDIATE)
-CREATE OR REPLACE FUNCTION FN_COUNT_TABLE(
-    P_TABLE_NAME IN VARCHAR2
+-- [4] WHILE loop, basic computation
+-- [5] EXECUTE IMMEDIATE (dynamic SQL in function)
+-- [6] RAISE_APPLICATION_ERROR
+CREATE OR REPLACE FUNCTION FN_COUNT_DYNAMIC(
+    P_TABLE_NAME IN VARCHAR2,
+    P_MAX_WAIT   IN NUMBER DEFAULT 5
 ) RETURN NUMBER
 IS
     V_SQL   VARCHAR2(500);
     V_COUNT NUMBER;
+    V_TRIES NUMBER := 0;
 BEGIN
-    V_SQL := 'SELECT COUNT(*) FROM ' || P_TABLE_NAME;
-    EXECUTE IMMEDIATE V_SQL INTO V_COUNT;
-    RETURN V_COUNT;
-EXCEPTION
-    WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('FN_COUNT_TABLE error: ' || SQLERRM);
-        RETURN -1;
-END FN_COUNT_TABLE;
+    IF P_TABLE_NAME IS NULL THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Table name must not be null');
+    END IF;
+    -- WHILE loop with retry
+    WHILE V_TRIES < P_MAX_WAIT LOOP
+        BEGIN
+            V_SQL := 'SELECT COUNT(*) FROM ' || P_TABLE_NAME;
+            EXECUTE IMMEDIATE V_SQL INTO V_COUNT;
+            RETURN V_COUNT;
+        EXCEPTION
+            WHEN OTHERS THEN
+                V_TRIES := V_TRIES + 1;
+        END;
+    END LOOP;
+    RAISE_APPLICATION_ERROR(-20002, 'Failed after ' || P_MAX_WAIT || ' attempts');
+END FN_COUNT_DYNAMIC;
 /
 
--- FOR循环: 计算阶乘 (numeric FOR loop)
-CREATE OR REPLACE FUNCTION FN_FACTORIAL(
-    P_N IN NUMBER
-) RETURN NUMBER
+-- [7] DBMS_RANDOM.VALUE, LENGTHB
+-- [8] Sequence .NEXTVAL usage
+CREATE OR REPLACE FUNCTION FN_GENERATE_TOKEN(
+    P_PREFIX IN VARCHAR2 DEFAULT 'TKN'
+) RETURN VARCHAR2
 IS
-    V_RESULT NUMBER := 1;
+    V_SEQ   NUMBER;
+    V_RAND  NUMBER;
+    V_TOKEN VARCHAR2(100);
 BEGIN
-    IF P_N < 0 THEN
-        RAISE_APPLICATION_ERROR(-20001, 'Input must be non-negative');
+    -- Sequence .NEXTVAL
+    SELECT SEQ_TOKEN.NEXTVAL INTO V_SEQ FROM DUAL;
+    -- DBMS_RANDOM.VALUE
+    V_RAND := TRUNC(DBMS_RANDOM.VALUE(1000, 9999));
+    V_TOKEN := P_PREFIX || '-' || LPAD(TO_CHAR(V_SEQ), 8, '0') || '-' || TO_CHAR(V_RAND);
+    -- LENGTHB (byte length check)
+    IF LENGTHB(V_TOKEN) > 50 THEN
+        V_TOKEN := SUBSTR(V_TOKEN, 1, 50);
     END IF;
-    FOR I IN 1..P_N LOOP
-        V_RESULT := V_RESULT * I;
-    END LOOP;
-    RETURN V_RESULT;
-END FN_FACTORIAL;
+    RETURN V_TOKEN;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('FN_GENERATE_TOKEN error: ' || SQLERRM);
+        RETURN NULL;
+END FN_GENERATE_TOKEN;
 /`,
 
-mysql: `-- 字符串格式化: 姓名脱敏 (SUBSTRING, CONCAT, HANDLER)
+mysql: `-- [1] SUBSTRING, CHAR_LENGTH, INSTR, REPLACE, LPAD, CONCAT
+-- [2] DATE_FORMAT, STR_TO_DATE, NOW(), IFNULL, IF(cond,a,b)
+-- [3] DECLARE variables, SET variable = expr
 DELIMITER $$
-CREATE FUNCTION fn_mask_name(
-    p_name VARCHAR(200)
-) RETURNS VARCHAR(200)
-DETERMINISTIC
-BEGIN
-    DECLARE v_result VARCHAR(200);
-    IF p_name IS NULL OR CHAR_LENGTH(p_name) < 2 THEN
-        RETURN p_name;
-    END IF;
-    SET v_result = CONCAT(LEFT(p_name, 1), LPAD('*', CHAR_LENGTH(p_name) - 1, '*'));
-    RETURN v_result;
-END$$
-DELIMITER ;
-
--- 日期处理: 计算工作日差 (WHILE, IFNULL, DAYOFWEEK)
-DELIMITER $$
-CREATE FUNCTION fn_workday_diff(
-    p_start_date DATETIME,
-    p_end_date   DATETIME
-) RETURNS INT
-DETERMINISTIC
-BEGIN
-    DECLARE v_days INT DEFAULT 0;
-    DECLARE v_cur  DATE;
-    SET v_cur = DATE(IFNULL(p_start_date, NOW()));
-    WHILE v_cur < DATE(IFNULL(p_end_date, NOW())) DO
-        IF DAYOFWEEK(v_cur) NOT IN (1, 7) THEN
-            SET v_days = v_days + 1;
-        END IF;
-        SET v_cur = DATE_ADD(v_cur, INTERVAL 1 DAY);
-    END WHILE;
-    RETURN v_days;
-END$$
-DELIMITER ;
-
--- 查询: 获取客户余额 (SELECT INTO, LIMIT)
-DELIMITER $$
-CREATE FUNCTION fn_get_client_balance(
-    p_client_no VARCHAR(32)
-) RETURNS DECIMAL(18,2)
+CREATE FUNCTION fn_format_client_label(
+    p_client_no  VARCHAR(32),
+    p_as_of_date VARCHAR(10)
+) RETURNS VARCHAR(500)
 READS SQL DATA
 BEGIN
-    DECLARE v_balance DECIMAL(18,2) DEFAULT 0;
-    SELECT IFNULL(balance, 0) INTO v_balance
+    DECLARE v_name   VARCHAR(200);
+    DECLARE v_status VARCHAR(20);
+    DECLARE v_joined DATE;
+    DECLARE v_label  VARCHAR(500);
+    DECLARE v_dt     DATE;
+    DECLARE v_pos    INT;
+    -- STR_TO_DATE, IFNULL, NOW()
+    SET v_dt = IFNULL(STR_TO_DATE(p_as_of_date, '%Y-%m-%d'), NOW());
+    SELECT client_name, status, join_date
+      INTO v_name, v_status, v_joined
       FROM t_client_info
      WHERE client_no = p_client_no
      LIMIT 1;
-    RETURN v_balance;
+    -- REPLACE, INSTR, SUBSTRING, LPAD, CHAR_LENGTH
+    SET v_name = REPLACE(v_name, '_', ' ');
+    SET v_pos  = INSTR(v_name, ' ');
+    IF v_pos > 0 THEN
+        SET v_name = CONCAT(SUBSTRING(v_name, 1, v_pos), LPAD(SUBSTRING(v_name, v_pos + 1, 1), 1), '.');
+    END IF;
+    -- IF(cond,a,b), CONCAT, DATE_FORMAT
+    SET v_label = CONCAT(
+        v_name,
+        ' [', IF(v_status = 'ACTIVE', 'A', IF(v_status = 'FROZEN', 'F', 'X')), ']',
+        IF(v_joined IS NOT NULL,
+           CONCAT(' since ', DATE_FORMAT(v_joined, '%Y-%m')),
+           ' new'),
+        ' months=', CAST(TIMESTAMPDIFF(MONTH, IFNULL(v_joined, DATE_SUB(v_dt, INTERVAL 1 MONTH)), v_dt) AS SIGNED INTEGER)
+    );
+    RETURN v_label;
 END$$
 DELIMITER ;
 
--- 动态SQL: 统计表行数 (PREPARE/EXECUTE)
+-- [4] WHILE...DO...END WHILE
+-- [5] CAST(... AS SIGNED INTEGER)
+-- [6] SIGNAL SQLSTATE
 DELIMITER $$
-CREATE FUNCTION fn_count_table(
-    p_table_name VARCHAR(128)
+CREATE FUNCTION fn_count_dynamic(
+    p_table_name VARCHAR(128),
+    p_max_wait   INT
 ) RETURNS INT
 READS SQL DATA
 BEGIN
     DECLARE v_count INT DEFAULT 0;
-    SET @_dyn_sql = CONCAT('SELECT COUNT(*) INTO @_dyn_count FROM ', p_table_name);
-    PREPARE _dyn_stmt FROM @_dyn_sql;
-    EXECUTE _dyn_stmt;
-    DEALLOCATE PREPARE _dyn_stmt;
-    SET v_count = @_dyn_count;
-    RETURN v_count;
-END$$
-DELIMITER ;
-
--- FOR循环等价: 计算阶乘 (WHILE loop, SIGNAL)
-DELIMITER $$
-CREATE FUNCTION fn_factorial(
-    p_n INT
-) RETURNS BIGINT
-DETERMINISTIC
-BEGIN
-    DECLARE v_result BIGINT DEFAULT 1;
-    DECLARE v_i INT DEFAULT 1;
-    IF p_n < 0 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Input must be non-negative';
+    DECLARE v_tries INT DEFAULT 0;
+    IF p_table_name IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Table name must not be null';
     END IF;
-    WHILE v_i <= p_n DO
-        SET v_result = v_result * v_i;
-        SET v_i = v_i + 1;
+    -- WHILE loop with retry
+    WHILE v_tries < CAST(p_max_wait AS SIGNED INTEGER) DO
+        SET @_dyn_sql = CONCAT('SELECT COUNT(*) INTO @_dyn_count FROM ', p_table_name);
+        PREPARE _dyn_stmt FROM @_dyn_sql;
+        EXECUTE _dyn_stmt;
+        DEALLOCATE PREPARE _dyn_stmt;
+        SET v_count = @_dyn_count;
+        IF v_count >= 0 THEN
+            RETURN v_count;
+        END IF;
+        SET v_tries = v_tries + 1;
     END WHILE;
-    RETURN v_result;
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Failed after max attempts';
 END$$
 DELIMITER ;`,
 
-postgresql: `-- 字符串格式化: 姓名脱敏 (SUBSTR, ||, EXCEPTION)
-CREATE OR REPLACE FUNCTION fn_mask_name(
-    p_name VARCHAR
+postgresql: `-- [1] SUBSTR, LENGTH, strpos, replace, lpad, initcap, || concat
+-- [2] to_char, to_date, date_trunc, COALESCE, CURRENT_DATE, CURRENT_TIMESTAMP
+-- [3] EXCEPTION WHEN NO_DATA_FOUND / WHEN OTHERS, SQLERRM, RAISE NOTICE
+CREATE OR REPLACE FUNCTION fn_format_client_label(
+    p_client_no  VARCHAR,
+    p_as_of_date VARCHAR DEFAULT NULL
 ) RETURNS VARCHAR
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_result VARCHAR(200);
+    v_name   VARCHAR(200);
+    v_status VARCHAR(20);
+    v_joined DATE;
+    v_label  VARCHAR(500);
+    v_dt     DATE;
+    v_pos    INTEGER;
 BEGIN
-    IF p_name IS NULL OR LENGTH(p_name) < 2 THEN
-        RETURN p_name;
-    END IF;
-    v_result := SUBSTR(p_name, 1, 1) || LPAD('*', LENGTH(p_name) - 1, '*');
-    RETURN v_result;
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE NOTICE 'fn_mask_name error: %', SQLERRM;
-        RETURN p_name;
-END;
-$$;
-
--- 日期处理: 计算工作日差 (WHILE LOOP, COALESCE, EXTRACT)
-CREATE OR REPLACE FUNCTION fn_workday_diff(
-    p_start_date TIMESTAMP,
-    p_end_date   TIMESTAMP
-) RETURNS INTEGER
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_days INTEGER := 0;
-    v_cur  DATE;
-BEGIN
-    v_cur := COALESCE(p_start_date, NOW())::DATE;
-    WHILE v_cur < COALESCE(p_end_date, NOW())::DATE LOOP
-        IF EXTRACT(DOW FROM v_cur) NOT IN (0, 6) THEN
-            v_days := v_days + 1;
-        END IF;
-        v_cur := v_cur + INTERVAL '1 day';
-    END LOOP;
-    RETURN v_days;
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE NOTICE 'fn_workday_diff error: %', SQLERRM;
-        RETURN -1;
-END;
-$$;
-
--- 查询带OUT参数: 获取客户余额与状态 (SELECT INTO, NOT FOUND)
-CREATE OR REPLACE FUNCTION fn_get_client_balance(
-    p_client_no  VARCHAR,
-    OUT p_status VARCHAR
-) RETURNS RECORD
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_balance NUMERIC(18,2);
-BEGIN
-    SELECT balance, status
-      INTO v_balance, p_status
+    -- to_date, COALESCE, CURRENT_DATE
+    v_dt := COALESCE(to_date(p_as_of_date, 'YYYY-MM-DD'), CURRENT_DATE);
+    -- SELECT INTO
+    SELECT client_name, status, join_date
+      INTO v_name, v_status, v_joined
       FROM t_client_info
      WHERE client_no = p_client_no;
-    IF NOT FOUND THEN
-        p_status := 'NOT_FOUND';
-        RETURN;
+    -- initcap, replace, strpos, SUBSTR, lpad, LENGTH
+    v_name := initcap(replace(v_name, '_', ' '));
+    v_pos  := strpos(v_name, ' ');
+    IF v_pos > 0 THEN
+        v_name := SUBSTR(v_name, 1, v_pos) || lpad(SUBSTR(v_name, v_pos + 1, 1), 1) || '.';
     END IF;
-    p_status := COALESCE(p_status, 'UNKNOWN');
-    RETURN;
+    -- to_char, date_trunc, || concat
+    v_label := v_name
+        || ' [' || CASE v_status WHEN 'ACTIVE' THEN 'A' WHEN 'FROZEN' THEN 'F' ELSE 'X' END || ']'
+        || COALESCE(' since ' || to_char(date_trunc('month', v_joined), 'YYYY-MM'), ' new')
+        || ' len=' || LENGTH(v_name);
+    RETURN v_label;
 EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE NOTICE 'Client not found: %', p_client_no;
+        RETURN NULL;
     WHEN OTHERS THEN
-        p_status := 'ERROR';
-        RAISE NOTICE 'fn_get_client_balance error: %', SQLERRM;
-        RETURN;
+        RAISE NOTICE 'fn_format_client_label err: %', SQLERRM;
+        RETURN NULL;
 END;
 $$;
 
--- 动态SQL: 统计表行数 (EXECUTE)
-CREATE OR REPLACE FUNCTION fn_count_table(
-    p_table_name VARCHAR
+-- [4] WHILE loop, FOR loop (numeric)
+-- [5] EXECUTE dynamic SQL
+-- [6] RAISE EXCEPTION, random()
+CREATE OR REPLACE FUNCTION fn_count_dynamic(
+    p_table_name VARCHAR,
+    p_max_wait   INTEGER DEFAULT 5
 ) RETURNS INTEGER
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_count INTEGER;
+    v_count  INTEGER;
+    v_tries  INTEGER := 0;
 BEGIN
-    EXECUTE 'SELECT COUNT(*) FROM ' || p_table_name INTO v_count;
-    RETURN v_count;
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE NOTICE 'fn_count_table error: %', SQLERRM;
-        RETURN -1;
+    IF p_table_name IS NULL THEN
+        RAISE EXCEPTION 'Table name must not be null' USING ERRCODE = 'P0001';
+    END IF;
+    -- WHILE loop with retry
+    WHILE v_tries < p_max_wait LOOP
+        BEGIN
+            EXECUTE 'SELECT COUNT(*) FROM ' || p_table_name INTO v_count;
+            RETURN v_count;
+        EXCEPTION
+            WHEN OTHERS THEN
+                v_tries := v_tries + 1;
+        END;
+    END LOOP;
+    RAISE EXCEPTION 'Failed after % attempts', p_max_wait;
 END;
 $$;
 
--- FOR循环: 计算阶乘 (numeric FOR loop, RAISE EXCEPTION)
-CREATE OR REPLACE FUNCTION fn_factorial(
-    p_n INTEGER
-) RETURNS BIGINT
+-- random(), FOR numeric loop, CURRENT_TIMESTAMP
+CREATE OR REPLACE FUNCTION fn_generate_token(
+    p_prefix VARCHAR DEFAULT 'TKN'
+) RETURNS VARCHAR
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_result BIGINT := 1;
+    v_token VARCHAR(100);
+    v_rand  INTEGER;
 BEGIN
-    IF p_n < 0 THEN
-        RAISE EXCEPTION 'Input must be non-negative' USING ERRCODE = 'P0001';
-    END IF;
-    FOR i IN 1..p_n LOOP
-        v_result := v_result * i;
+    v_token := p_prefix;
+    -- FOR numeric loop
+    FOR i IN 1..3 LOOP
+        -- random()
+        v_rand := trunc(random() * 9000 + 1000);
+        v_token := v_token || '-' || lpad(v_rand::TEXT, 4, '0');
     END LOOP;
-    RETURN v_result;
+    v_token := v_token || '-' || to_char(CURRENT_TIMESTAMP, 'HH24MISS');
+    RETURN v_token;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'fn_generate_token error: %', SQLERRM;
+        RETURN NULL;
 END;
 $$;`
 };
 
 /* ===== PROC SAMPLES ===== */
 const PROC_SAMPLES = {
-oracle: `-- CRUD操作: 新增或更新客户 (NVL, COMMIT, EXCEPTION)
-CREATE OR REPLACE PROCEDURE SP_UPSERT_CLIENT(
-    P_CLIENT_NO   IN  VARCHAR2,
-    P_CLIENT_NAME IN  VARCHAR2,
-    P_PHONE       IN  VARCHAR2,
-    P_STATUS      IN  VARCHAR2 DEFAULT 'ACTIVE',
-    P_RESULT      OUT NUMBER
-)
-IS
-    V_COUNT NUMBER;
-BEGIN
-    SELECT COUNT(*) INTO V_COUNT
-      FROM T_CLIENT_INFO
-     WHERE CLIENT_NO = P_CLIENT_NO;
-
-    IF V_COUNT > 0 THEN
-        UPDATE T_CLIENT_INFO
-           SET CLIENT_NAME = NVL(P_CLIENT_NAME, CLIENT_NAME),
-               PHONE       = NVL(P_PHONE, PHONE),
-               STATUS      = NVL(P_STATUS, STATUS),
-               UPDATE_TIME = SYSTIMESTAMP
-         WHERE CLIENT_NO = P_CLIENT_NO;
-        P_RESULT := SQL%ROWCOUNT;
-    ELSE
-        INSERT INTO T_CLIENT_INFO (CLIENT_NO, CLIENT_NAME, PHONE, STATUS, CREATE_TIME)
-        VALUES (P_CLIENT_NO, P_CLIENT_NAME, P_PHONE, P_STATUS, SYSTIMESTAMP);
-        P_RESULT := 1;
-    END IF;
-    COMMIT;
-EXCEPTION
-    WHEN OTHERS THEN
-        ROLLBACK;
-        P_RESULT := -1;
-        DBMS_OUTPUT.PUT_LINE('SP_UPSERT_CLIENT error: ' || SQLERRM);
-END SP_UPSERT_CLIENT;
-/
-
--- 游标遍历: 冻结低余额客户 (CURSOR, LOOP, FETCH, %NOTFOUND)
+oracle: `-- [1] CURSOR, OPEN/FETCH/CLOSE, %NOTFOUND, %ISOPEN, %ROWTYPE
+-- [2] FOR r IN (SELECT...) LOOP (query FOR), || concat in output
+-- [3] SQL%ROWCOUNT, SELECT...INTO, COMMIT/ROLLBACK
+-- [10] Full EXCEPTION: NO_DATA_FOUND, WHEN OTHERS, SQLERRM, SQLCODE,
+--      DBMS_OUTPUT.PUT_LINE, DBMS_UTILITY.FORMAT_ERROR_BACKTRACE, RAISE
 CREATE OR REPLACE PROCEDURE SP_FREEZE_LOW_BALANCE(
     P_THRESHOLD IN  NUMBER,
     P_COUNT     OUT NUMBER
 )
 IS
     CURSOR C_CLIENTS IS
-        SELECT CLIENT_NO, BALANCE
+        SELECT CLIENT_NO, CLIENT_NAME, BALANCE
           FROM T_CLIENT_INFO
          WHERE STATUS = 'ACTIVE'
            AND BALANCE < P_THRESHOLD;
     V_REC C_CLIENTS%ROWTYPE;
+    V_MSG VARCHAR2(500);
 BEGIN
     P_COUNT := 0;
     OPEN C_CLIENTS;
     LOOP
         FETCH C_CLIENTS INTO V_REC;
         EXIT WHEN C_CLIENTS%NOTFOUND;
+        -- SQL%ROWCOUNT after UPDATE
         UPDATE T_CLIENT_INFO
            SET STATUS = 'FROZEN', UPDATE_TIME = SYSTIMESTAMP
          WHERE CLIENT_NO = V_REC.CLIENT_NO;
-        P_COUNT := P_COUNT + 1;
+        P_COUNT := P_COUNT + SQL%ROWCOUNT;
     END LOOP;
     CLOSE C_CLIENTS;
     COMMIT;
-    DBMS_OUTPUT.PUT_LINE('Frozen ' || P_COUNT || ' clients below threshold ' || P_THRESHOLD);
+    -- || concatenation in output
+    DBMS_OUTPUT.PUT_LINE('Frozen ' || P_COUNT || ' clients below ' || P_THRESHOLD);
 EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        DBMS_OUTPUT.PUT_LINE('No data found during freeze');
+        IF C_CLIENTS%ISOPEN THEN CLOSE C_CLIENTS; END IF;
+        ROLLBACK;
     WHEN OTHERS THEN
         IF C_CLIENTS%ISOPEN THEN CLOSE C_CLIENTS; END IF;
         ROLLBACK;
         P_COUNT := -1;
-        DBMS_OUTPUT.PUT_LINE('SP_FREEZE_LOW_BALANCE error: ' || SQLERRM);
+        V_MSG := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
+        DBMS_OUTPUT.PUT_LINE('SP_FREEZE err ' || SQLCODE || ': ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('Backtrace: ' || V_MSG);
+        RAISE;
 END SP_FREEZE_LOW_BALANCE;
 /
 
--- 事务处理: 转账 (FOR UPDATE, SEQ, NO_DATA_FOUND)
-CREATE OR REPLACE PROCEDURE SP_TRANSFER(
-    P_FROM_NO IN  VARCHAR2,
-    P_TO_NO   IN  VARCHAR2,
-    P_AMOUNT  IN  NUMBER,
-    P_RESULT  OUT VARCHAR2
+-- [4] MERGE INTO...USING...ON...WHEN MATCHED/NOT MATCHED
+-- [5] EXECUTE IMMEDIATE with USING and INTO
+-- [7] FOR i IN 1..N LOOP (numeric FOR)
+CREATE OR REPLACE PROCEDURE SP_SYNC_CLIENT_STATS(
+    P_BATCH_SIZE IN  NUMBER DEFAULT 100,
+    P_UPDATED    OUT NUMBER
 )
 IS
-    V_FROM_BAL NUMBER(18,2);
+    V_SQL   VARCHAR2(500);
+    V_CNT   NUMBER;
 BEGIN
-    IF P_AMOUNT <= 0 THEN
-        P_RESULT := 'INVALID_AMOUNT';
-        RETURN;
-    END IF;
-
-    SELECT NVL(BALANCE, 0) INTO V_FROM_BAL
-      FROM T_CLIENT_INFO
-     WHERE CLIENT_NO = P_FROM_NO
-       FOR UPDATE;
-
-    IF V_FROM_BAL < P_AMOUNT THEN
-        P_RESULT := 'INSUFFICIENT_FUNDS';
-        RETURN;
-    END IF;
-
-    UPDATE T_CLIENT_INFO SET BALANCE = BALANCE - P_AMOUNT, UPDATE_TIME = SYSTIMESTAMP WHERE CLIENT_NO = P_FROM_NO;
-    UPDATE T_CLIENT_INFO SET BALANCE = BALANCE + P_AMOUNT, UPDATE_TIME = SYSTIMESTAMP WHERE CLIENT_NO = P_TO_NO;
-
-    INSERT INTO T_TRADE_RECORD (TRADE_ID, CLIENT_NO, TRADE_DATE, TRADE_TYPE, AMOUNT, STATUS, CREATE_TIME)
-    VALUES (SEQ_TRADE.NEXTVAL, P_FROM_NO, SYSDATE, 'TRANSFER', P_AMOUNT, 'SUCCESS', SYSTIMESTAMP);
-
+    P_UPDATED := 0;
+    -- MERGE INTO
+    MERGE INTO T_CLIENT_STATS S
+    USING (
+        SELECT CLIENT_NO, COUNT(*) AS TRADE_CNT, SUM(AMOUNT) AS TOTAL_AMT
+          FROM T_TRADE_RECORD
+         GROUP BY CLIENT_NO
+    ) T
+    ON (S.CLIENT_NO = T.CLIENT_NO)
+    WHEN MATCHED THEN
+        UPDATE SET S.TRADE_COUNT = T.TRADE_CNT, S.TOTAL_AMOUNT = T.TOTAL_AMT, S.UPDATE_TIME = SYSTIMESTAMP
+    WHEN NOT MATCHED THEN
+        INSERT (CLIENT_NO, TRADE_COUNT, TOTAL_AMOUNT, UPDATE_TIME)
+        VALUES (T.CLIENT_NO, T.TRADE_CNT, T.TOTAL_AMT, SYSTIMESTAMP);
+    P_UPDATED := SQL%ROWCOUNT;
+    -- EXECUTE IMMEDIATE with USING and INTO
+    V_SQL := 'SELECT COUNT(*) FROM T_CLIENT_STATS WHERE TRADE_COUNT > :min_trades';
+    EXECUTE IMMEDIATE V_SQL INTO V_CNT USING 10;
+    -- FOR i IN 1..N numeric loop for batch logging
+    FOR I IN 1..LEAST(P_UPDATED, 3) LOOP
+        DBMS_OUTPUT.PUT_LINE('Batch ' || I || ' of sync complete');
+    END LOOP;
     COMMIT;
-    P_RESULT := 'SUCCESS';
 EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        ROLLBACK;
-        P_RESULT := 'ACCOUNT_NOT_FOUND';
     WHEN OTHERS THEN
         ROLLBACK;
-        P_RESULT := 'ERROR: ' || SQLERRM;
-        DBMS_OUTPUT.PUT_LINE('SP_TRANSFER error: ' || SQLERRM);
-END SP_TRANSFER;
+        P_UPDATED := -1;
+        DBMS_OUTPUT.PUT_LINE('SP_SYNC err ' || SQLCODE || ': ' || SQLERRM);
+        RAISE;
+END SP_SYNC_CLIENT_STATS;
 /
 
--- 动态SQL与FOR循环: 批量归档 (EXECUTE IMMEDIATE, FOR..IN, MERGE)
-CREATE OR REPLACE PROCEDURE SP_ARCHIVE_OLD_TRADES(
-    P_DAYS_OLD   IN  NUMBER,
-    P_BATCH_SIZE IN  NUMBER DEFAULT 1000,
-    P_ARCHIVED   OUT NUMBER
+-- [6] FOR r IN (SELECT...) LOOP (query FOR)
+-- [8] SELECT...INTO variable
+-- [9] Sequence .NEXTVAL, NVL
+CREATE OR REPLACE PROCEDURE SP_ARCHIVE_TRADES(
+    P_DAYS_OLD IN  NUMBER,
+    P_ARCHIVED OUT NUMBER
 )
 IS
-    V_SQL VARCHAR2(1000);
     V_CUTOFF DATE;
 BEGIN
     P_ARCHIVED := 0;
-    V_CUTOFF := SYSDATE - P_DAYS_OLD;
-
-    -- 使用MERGE归档到历史表
-    MERGE INTO T_TRADE_HISTORY H
-    USING (
-        SELECT * FROM T_TRADE_RECORD
+    V_CUTOFF := TRUNC(SYSDATE) - P_DAYS_OLD;
+    -- FOR r IN (SELECT...) query loop
+    FOR REC IN (
+        SELECT TRADE_ID, CLIENT_NO, TRADE_DATE, AMOUNT
+          FROM T_TRADE_RECORD
          WHERE TRADE_DATE < V_CUTOFF
-           AND ROWNUM <= P_BATCH_SIZE
-    ) S
-    ON (H.TRADE_ID = S.TRADE_ID)
-    WHEN NOT MATCHED THEN
-        INSERT (TRADE_ID, CLIENT_NO, TRADE_DATE, TRADE_TYPE, AMOUNT, STATUS, CREATE_TIME)
-        VALUES (S.TRADE_ID, S.CLIENT_NO, S.TRADE_DATE, S.TRADE_TYPE, S.AMOUNT, 'ARCHIVED', SYSTIMESTAMP);
-
-    P_ARCHIVED := SQL%ROWCOUNT;
-
-    -- 使用动态SQL删除已归档记录
-    V_SQL := 'DELETE FROM T_TRADE_RECORD WHERE TRADE_DATE < :1 AND ROWNUM <= :2';
-    EXECUTE IMMEDIATE V_SQL USING V_CUTOFF, P_BATCH_SIZE;
-
-    -- 使用FOR循环更新统计
-    FOR REC IN (SELECT CLIENT_NO, COUNT(*) AS TRADE_CNT FROM T_TRADE_RECORD GROUP BY CLIENT_NO) LOOP
-        UPDATE T_CLIENT_INFO SET TRADE_COUNT = REC.TRADE_CNT WHERE CLIENT_NO = REC.CLIENT_NO;
+    ) LOOP
+        INSERT INTO T_TRADE_HISTORY (HIST_ID, TRADE_ID, CLIENT_NO, TRADE_DATE, AMOUNT, ARCHIVE_TIME)
+        VALUES (SEQ_HIST.NEXTVAL, REC.TRADE_ID, REC.CLIENT_NO, REC.TRADE_DATE, NVL(REC.AMOUNT, 0), SYSTIMESTAMP);
+        P_ARCHIVED := P_ARCHIVED + 1;
     END LOOP;
-
+    DELETE FROM T_TRADE_RECORD WHERE TRADE_DATE < V_CUTOFF;
     COMMIT;
     DBMS_OUTPUT.PUT_LINE('Archived ' || P_ARCHIVED || ' trades older than ' || P_DAYS_OLD || ' days');
 EXCEPTION
     WHEN OTHERS THEN
         ROLLBACK;
         P_ARCHIVED := -1;
-        DBMS_OUTPUT.PUT_LINE('SP_ARCHIVE_OLD_TRADES error: ' || SQLERRM);
-END SP_ARCHIVE_OLD_TRADES;
+        DBMS_OUTPUT.PUT_LINE('SP_ARCHIVE err: ' || SQLERRM);
+END SP_ARCHIVE_TRADES;
 /`,
 
-mysql: `-- CRUD操作: 新增或更新客户 (IFNULL, HANDLER, CURSOR)
-DELIMITER $$
-CREATE PROCEDURE sp_upsert_client(
-    IN  p_client_no   VARCHAR(32),
-    IN  p_client_name VARCHAR(200),
-    IN  p_phone       VARCHAR(20),
-    IN  p_status      VARCHAR(10),
-    OUT p_result      INT
-)
-BEGIN
-    DECLARE v_count INT DEFAULT 0;
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        SET p_result = -1;
-    END;
-
-    SELECT COUNT(*) INTO v_count
-      FROM t_client_info
-     WHERE client_no = p_client_no;
-
-    START TRANSACTION;
-    IF v_count > 0 THEN
-        UPDATE t_client_info
-           SET client_name = IFNULL(p_client_name, client_name),
-               phone       = IFNULL(p_phone, phone),
-               status      = IFNULL(p_status, status),
-               update_time = CURRENT_TIMESTAMP(6)
-         WHERE client_no = p_client_no;
-        SET p_result = ROW_COUNT();
-    ELSE
-        INSERT INTO t_client_info (client_no, client_name, phone, status, create_time)
-        VALUES (p_client_no, p_client_name, p_phone, IFNULL(p_status, 'ACTIVE'), CURRENT_TIMESTAMP(6));
-        SET p_result = 1;
-    END IF;
-    COMMIT;
-END$$
-DELIMITER ;
-
--- 游标遍历: 冻结低余额客户 (CURSOR, HANDLER FOR NOT FOUND)
-DELIMITER $$
+mysql: `-- [1] DECLARE cursor, OPEN/FETCH/CLOSE, CONTINUE HANDLER FOR NOT FOUND
+-- [6] CONCAT for concatenation, SELECT for debug output
+-- [7] START TRANSACTION/COMMIT/ROLLBACK
+-- [8] Full DECLARE EXIT HANDLER FOR SQLEXCEPTION with GET DIAGNOSTICS, RESIGNAL
 CREATE PROCEDURE sp_freeze_low_balance(
     IN  p_threshold DECIMAL(18,2),
     OUT p_count     INT
@@ -1459,14 +1357,22 @@ CREATE PROCEDURE sp_freeze_low_balance(
 BEGIN
     DECLARE v_client_no VARCHAR(32);
     DECLARE v_done INT DEFAULT 0;
+    DECLARE v_err_msg VARCHAR(500);
+    DECLARE v_err_code INT;
+    -- [1] CURSOR + HANDLER FOR NOT FOUND
     DECLARE c_clients CURSOR FOR
         SELECT client_no FROM t_client_info
          WHERE status = 'ACTIVE' AND balance < p_threshold;
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_done = 1;
+    -- [8] EXIT HANDLER with GET DIAGNOSTICS + RESIGNAL
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
+        GET DIAGNOSTICS CONDITION 1
+            v_err_code = MYSQL_ERRNO, v_err_msg = MESSAGE_TEXT;
         ROLLBACK;
         SET p_count = -1;
+        SELECT CONCAT('sp_freeze err ', v_err_code, ': ', v_err_msg) AS err_info;
+        RESIGNAL;
     END;
 
     SET p_count = 0;
@@ -1478,64 +1384,67 @@ BEGIN
         UPDATE t_client_info
            SET status = 'FROZEN', update_time = CURRENT_TIMESTAMP(6)
          WHERE client_no = v_client_no;
-        SET p_count = p_count + 1;
+        -- [5] SET variable = ROW_COUNT()
+        SET p_count = p_count + ROW_COUNT();
     END LOOP;
     CLOSE c_clients;
     COMMIT;
-    SELECT CONCAT('Frozen ', p_count, ' clients below threshold ', p_threshold) AS msg;
-END$$
-DELIMITER ;
+    -- [6] CONCAT + SELECT for debug
+    SELECT CONCAT('Frozen ', p_count, ' clients below ', p_threshold) AS msg;
+END;
 
--- 事务处理: 转账 (FOR UPDATE, SIGNAL, HANDLER)
-DELIMITER $$
-CREATE PROCEDURE sp_transfer(
-    IN  p_from_no VARCHAR(32),
-    IN  p_to_no   VARCHAR(32),
-    IN  p_amount  DECIMAL(18,2),
-    OUT p_result  VARCHAR(100)
+-- [2] WHILE...DO (replacing FOR loops)
+-- [3] INSERT...ON DUPLICATE KEY UPDATE (replacing MERGE)
+-- [9] SIGNAL SQLSTATE '45000'
+-- [10] ELSEIF
+CREATE PROCEDURE sp_sync_client_stats(
+    IN  p_batch_size INT,
+    OUT p_updated    INT
 )
 BEGIN
-    DECLARE v_from_bal DECIMAL(18,2) DEFAULT 0;
+    DECLARE v_offset INT DEFAULT 0;
+    DECLARE v_batch  INT;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
-        SET p_result = CONCAT('ERROR: ', @err_msg);
+        SET p_updated = -1;
     END;
 
-    IF p_amount <= 0 THEN
-        SET p_result = 'INVALID_AMOUNT';
-    ELSE
-        START TRANSACTION;
-        SELECT IFNULL(balance, 0) INTO v_from_bal
-          FROM t_client_info
-         WHERE client_no = p_from_no
-           FOR UPDATE;
-
-        IF v_from_bal < p_amount THEN
-            ROLLBACK;
-            SET p_result = 'INSUFFICIENT_FUNDS';
-        ELSE
-            UPDATE t_client_info SET balance = balance - p_amount, update_time = CURRENT_TIMESTAMP(6) WHERE client_no = p_from_no;
-            UPDATE t_client_info SET balance = balance + p_amount, update_time = CURRENT_TIMESTAMP(6) WHERE client_no = p_to_no;
-            INSERT INTO t_trade_record (trade_id, client_no, trade_date, trade_type, amount, status, create_time)
-            VALUES (FLOOR(RAND() * 999999999), p_from_no, NOW(), 'TRANSFER', p_amount, 'SUCCESS', CURRENT_TIMESTAMP(6));
-            COMMIT;
-            SET p_result = 'SUCCESS';
-        END IF;
+    SET p_updated = 0;
+    IF p_batch_size <= 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Batch size must be positive';
+    ELSEIF p_batch_size > 10000 THEN
+        SET p_batch_size = 10000;
     END IF;
-END$$
-DELIMITER ;
+    START TRANSACTION;
+    -- [3] INSERT...ON DUPLICATE KEY UPDATE (MERGE equivalent)
+    INSERT INTO t_client_stats (client_no, trade_count, total_amount, update_time)
+    SELECT client_no, COUNT(*), SUM(amount), CURRENT_TIMESTAMP(6)
+      FROM t_trade_record
+     GROUP BY client_no
+    ON DUPLICATE KEY UPDATE
+        trade_count  = VALUES(trade_count),
+        total_amount = VALUES(total_amount),
+        update_time  = CURRENT_TIMESTAMP(6);
+    SET p_updated = ROW_COUNT();
+    -- [2] WHILE loop (replacing numeric FOR)
+    SET v_offset = 1;
+    WHILE v_offset <= LEAST(p_updated, 3) DO
+        SELECT CONCAT('Batch ', v_offset, ' of sync complete') AS msg;
+        SET v_offset = v_offset + 1;
+    END WHILE;
+    COMMIT;
+END;
 
--- 动态SQL与批量操作: 归档旧交易 (PREPARE/EXECUTE, INSERT...SELECT, WHILE)
-DELIMITER $$
-CREATE PROCEDURE sp_archive_old_trades(
+-- [4] PREPARE/EXECUTE/DEALLOCATE PREPARE (dynamic SQL)
+-- [5] SELECT...INTO variable, SET variable = ROW_COUNT()
+CREATE PROCEDURE sp_archive_trades(
     IN  p_days_old   INT,
     IN  p_batch_size INT,
     OUT p_archived   INT
 )
 BEGIN
     DECLARE v_cutoff DATE;
-    DECLARE v_affected INT DEFAULT 1;
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
@@ -1544,64 +1453,29 @@ BEGIN
 
     SET p_archived = 0;
     SET v_cutoff = DATE_SUB(NOW(), INTERVAL p_days_old DAY);
-
-    -- 归档到历史表 (INSERT ... SELECT 等价MERGE)
-    INSERT IGNORE INTO t_trade_history (trade_id, client_no, trade_date, trade_type, amount, status, create_time)
-    SELECT trade_id, client_no, trade_date, trade_type, amount, 'ARCHIVED', CURRENT_TIMESTAMP(6)
+    START TRANSACTION;
+    -- Archive using INSERT...SELECT
+    INSERT IGNORE INTO t_trade_history (trade_id, client_no, trade_date, amount, archive_time)
+    SELECT trade_id, client_no, trade_date, IFNULL(amount, 0), CURRENT_TIMESTAMP(6)
       FROM t_trade_record
      WHERE trade_date < v_cutoff
      LIMIT p_batch_size;
     SET p_archived = ROW_COUNT();
-
-    -- 使用动态SQL删除已归档记录
-    SET @_dyn_sql = CONCAT('DELETE FROM t_trade_record WHERE trade_date < ''', v_cutoff, ''' LIMIT ', p_batch_size);
+    -- [4] Dynamic SQL with PREPARE/EXECUTE
+    SET @_dyn_sql = CONCAT('DELETE FROM t_trade_record WHERE trade_date < ''',
+                           DATE_FORMAT(v_cutoff, '%Y-%m-%d'), ''' LIMIT ', p_batch_size);
     PREPARE _dyn_stmt FROM @_dyn_sql;
     EXECUTE _dyn_stmt;
     DEALLOCATE PREPARE _dyn_stmt;
-
     COMMIT;
     SELECT CONCAT('Archived ', p_archived, ' trades older than ', p_days_old, ' days') AS msg;
-END$$
-DELIMITER ;`,
+END;`,
 
-postgresql: `-- CRUD操作: 新增或更新客户 (COALESCE, EXCEPTION, GET DIAGNOSTICS)
-CREATE OR REPLACE PROCEDURE sp_upsert_client(
-    IN  p_client_no   VARCHAR,
-    IN  p_client_name VARCHAR,
-    IN  p_phone       VARCHAR,
-    IN  p_status      VARCHAR DEFAULT 'ACTIVE',
-    OUT p_result      INTEGER
-)
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_count INTEGER;
-BEGIN
-    SELECT COUNT(*) INTO v_count
-      FROM t_client_info
-     WHERE client_no = p_client_no;
-
-    IF v_count > 0 THEN
-        UPDATE t_client_info
-           SET client_name = COALESCE(p_client_name, client_name),
-               phone       = COALESCE(p_phone, phone),
-               status      = COALESCE(p_status, status),
-               update_time = CLOCK_TIMESTAMP()
-         WHERE client_no = p_client_no;
-        GET DIAGNOSTICS p_result = ROW_COUNT;
-    ELSE
-        INSERT INTO t_client_info (client_no, client_name, phone, status, create_time)
-        VALUES (p_client_no, p_client_name, p_phone, COALESCE(p_status, 'ACTIVE'), CLOCK_TIMESTAMP());
-        p_result := 1;
-    END IF;
-EXCEPTION
-    WHEN OTHERS THEN
-        p_result := -1;
-        RAISE NOTICE 'sp_upsert_client error: %', SQLERRM;
-END;
-$$;
-
--- 游标遍历: 冻结低余额客户 (CURSOR, FETCH, NOT FOUND)
+postgresql: `-- [1] Explicit cursor with FOUND/NOT FOUND
+-- [6] || concatenation, RAISE NOTICE
+-- [7] COMMIT/ROLLBACK (in procedure)
+-- [8] Full EXCEPTION: NO_DATA_FOUND, WHEN OTHERS, SQLERRM, SQLSTATE,
+--     RAISE NOTICE, PG_EXCEPTION_CONTEXT, RAISE
 CREATE OR REPLACE PROCEDURE sp_freeze_low_balance(
     IN  p_threshold NUMERIC,
     OUT p_count     INTEGER
@@ -1609,9 +1483,10 @@ CREATE OR REPLACE PROCEDURE sp_freeze_low_balance(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_rec RECORD;
+    v_rec      RECORD;
+    v_ctx      TEXT;
     c_clients CURSOR FOR
-        SELECT client_no, balance
+        SELECT client_no, client_name, balance
           FROM t_client_info
          WHERE status = 'ACTIVE'
            AND balance < p_threshold;
@@ -1627,62 +1502,74 @@ BEGIN
         p_count := p_count + 1;
     END LOOP;
     CLOSE c_clients;
-    RAISE NOTICE 'Frozen % clients below threshold %', p_count, p_threshold;
+    COMMIT;
+    -- || concatenation, RAISE NOTICE
+    RAISE NOTICE 'Frozen % clients below %', p_count, p_threshold;
 EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE NOTICE 'No data found during freeze';
+        ROLLBACK;
     WHEN OTHERS THEN
+        ROLLBACK;
         p_count := -1;
-        RAISE NOTICE 'sp_freeze_low_balance error: %', SQLERRM;
+        GET STACKED DIAGNOSTICS v_ctx = PG_EXCEPTION_CONTEXT;
+        RAISE NOTICE 'sp_freeze err SQLSTATE=% : %', SQLSTATE, SQLERRM;
+        RAISE NOTICE 'Context: %', v_ctx;
+        RAISE;
 END;
 $$;
 
--- 事务处理: 转账 (FOR UPDATE, nextval, NOT FOUND)
-CREATE OR REPLACE PROCEDURE sp_transfer(
-    IN  p_from_no VARCHAR,
-    IN  p_to_no   VARCHAR,
-    IN  p_amount  NUMERIC,
-    OUT p_result  VARCHAR
+-- [2] FOR i IN 1..N LOOP, FOR r IN SELECT...LOOP
+-- [3] MERGE INTO (PG 15+)
+-- [5] SELECT...INTO variable, GET DIAGNOSTICS v_cnt = ROW_COUNT
+CREATE OR REPLACE PROCEDURE sp_sync_client_stats(
+    IN  p_batch_size INTEGER DEFAULT 100,
+    OUT p_updated    INTEGER
 )
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_from_bal NUMERIC(18,2);
+    v_cnt INTEGER;
+    rec   RECORD;
 BEGIN
-    IF p_amount <= 0 THEN
-        p_result := 'INVALID_AMOUNT';
-        RETURN;
-    END IF;
-
-    SELECT COALESCE(balance, 0) INTO v_from_bal
-      FROM t_client_info
-     WHERE client_no = p_from_no
-       FOR UPDATE;
-
-    IF NOT FOUND THEN
-        p_result := 'ACCOUNT_NOT_FOUND';
-        RETURN;
-    END IF;
-
-    IF v_from_bal < p_amount THEN
-        p_result := 'INSUFFICIENT_FUNDS';
-        RETURN;
-    END IF;
-
-    UPDATE t_client_info SET balance = balance - p_amount, update_time = CLOCK_TIMESTAMP() WHERE client_no = p_from_no;
-    UPDATE t_client_info SET balance = balance + p_amount, update_time = CLOCK_TIMESTAMP() WHERE client_no = p_to_no;
-
-    INSERT INTO t_trade_record (trade_id, client_no, trade_date, trade_type, amount, status, create_time)
-    VALUES (nextval('seq_trade'), p_from_no, NOW(), 'TRANSFER', p_amount, 'SUCCESS', CLOCK_TIMESTAMP());
-
-    p_result := 'SUCCESS';
+    p_updated := 0;
+    -- [3] MERGE INTO (PG 15+)
+    MERGE INTO t_client_stats S
+    USING (
+        SELECT client_no, COUNT(*) AS trade_cnt, SUM(amount) AS total_amt
+          FROM t_trade_record
+         GROUP BY client_no
+    ) T
+    ON S.client_no = T.client_no
+    WHEN MATCHED THEN
+        UPDATE SET trade_count = T.trade_cnt, total_amount = T.total_amt, update_time = CLOCK_TIMESTAMP()
+    WHEN NOT MATCHED THEN
+        INSERT (client_no, trade_count, total_amount, update_time)
+        VALUES (T.client_no, T.trade_cnt, T.total_amt, CLOCK_TIMESTAMP());
+    -- [5] GET DIAGNOSTICS
+    GET DIAGNOSTICS p_updated = ROW_COUNT;
+    -- [2] FOR i IN 1..N numeric loop
+    FOR i IN 1..LEAST(p_updated, 3) LOOP
+        RAISE NOTICE 'Batch % of sync complete', i;
+    END LOOP;
+    -- [2] FOR r IN SELECT...LOOP
+    FOR rec IN SELECT client_no, trade_count FROM t_client_stats WHERE trade_count > 100 LOOP
+        RAISE NOTICE 'High-volume client: %', rec.client_no;
+    END LOOP;
+    COMMIT;
 EXCEPTION
     WHEN OTHERS THEN
-        p_result := 'ERROR: ' || SQLERRM;
-        RAISE NOTICE 'sp_transfer error: %', SQLERRM;
+        ROLLBACK;
+        p_updated := -1;
+        RAISE NOTICE 'sp_sync err: % %', SQLSTATE, SQLERRM;
+        RAISE;
 END;
 $$;
 
--- 动态SQL与FOR循环: 批量归档 (EXECUTE, FOR..IN query, INSERT ON CONFLICT)
-CREATE OR REPLACE PROCEDURE sp_archive_old_trades(
+-- [4] EXECUTE dynamic SQL
+-- [5] SELECT...INTO
+-- Cursor FOR loop shorthand
+CREATE OR REPLACE PROCEDURE sp_archive_trades(
     IN  p_days_old   INTEGER,
     IN  p_batch_size INTEGER DEFAULT 1000,
     OUT p_archived   INTEGER
@@ -1691,34 +1578,30 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_cutoff DATE;
-    rec RECORD;
+    rec      RECORD;
 BEGIN
     p_archived := 0;
-    v_cutoff := NOW()::DATE - p_days_old;
-
-    -- 使用INSERT ON CONFLICT归档到历史表 (PG等价MERGE)
-    INSERT INTO t_trade_history (trade_id, client_no, trade_date, trade_type, amount, status, create_time)
-    SELECT trade_id, client_no, trade_date, trade_type, amount, 'ARCHIVED', CLOCK_TIMESTAMP()
-      FROM t_trade_record
-     WHERE trade_date < v_cutoff
-     LIMIT p_batch_size
-    ON CONFLICT (trade_id) DO NOTHING;
-
-    GET DIAGNOSTICS p_archived = ROW_COUNT;
-
-    -- 使用动态SQL删除已归档记录
-    EXECUTE 'DELETE FROM t_trade_record WHERE trade_date < $1' USING v_cutoff;
-
-    -- 使用FOR循环更新统计
-    FOR rec IN SELECT client_no, COUNT(*) AS trade_cnt FROM t_trade_record GROUP BY client_no LOOP
-        UPDATE t_client_info SET trade_count = rec.trade_cnt WHERE client_no = rec.client_no;
+    v_cutoff := CURRENT_DATE - p_days_old;
+    -- Cursor FOR loop (implicit open/fetch/close)
+    FOR rec IN
+        SELECT trade_id, client_no, trade_date, COALESCE(amount, 0) AS amount
+          FROM t_trade_record
+         WHERE trade_date < v_cutoff
+         LIMIT p_batch_size
+    LOOP
+        INSERT INTO t_trade_history (trade_id, client_no, trade_date, amount, archive_time)
+        VALUES (rec.trade_id, rec.client_no, rec.trade_date, rec.amount, CLOCK_TIMESTAMP());
+        p_archived := p_archived + 1;
     END LOOP;
-
+    -- [4] EXECUTE dynamic SQL
+    EXECUTE 'DELETE FROM t_trade_record WHERE trade_date < $1' USING v_cutoff;
+    COMMIT;
     RAISE NOTICE 'Archived % trades older than % days', p_archived, p_days_old;
 EXCEPTION
     WHEN OTHERS THEN
+        ROLLBACK;
         p_archived := -1;
-        RAISE NOTICE 'sp_archive_old_trades error: %', SQLERRM;
+        RAISE NOTICE 'sp_archive err: %', SQLERRM;
 END;
 $$;`
 }
@@ -2798,6 +2681,20 @@ function _convertConcatToFunction(line) {
     return line;
   }
 
+  // Handle function calls with || inside arguments, e.g. DBMS_OUTPUT.PUT_LINE('x' || y);
+  // Replace || inside each top-level parenthesized argument list
+  let converted = trimmed;
+  let changed = false;
+  converted = converted.replace(/(\b\w+(?:\.\w+)?\s*)\(([^()]*\|\|[^()]*)\)/g, function(fm, fnName, inner) {
+    const innerParts = _splitOnPipeOutsideStringsAndParens(inner);
+    if (innerParts.length > 1) {
+      changed = true;
+      return fnName + '(CONCAT(' + innerParts.map(function(p) { return p.trim(); }).join(', ') + '))';
+    }
+    return fm;
+  });
+  if (changed) return leading + converted;
+
   // Fallback: try to convert the whole line if it has ||
   const parts2 = _splitOnPipeOutsideStringsAndParens(trimmed);
   if (parts2.length > 1) {
@@ -2955,8 +2852,8 @@ function transformBody(body, fromDb, toDb) {
     if (toDb === 'mysql') b = b.replace(/\bTO_NUMBER\s*\(\s*([^)]+)\s*\)/gi, 'CAST($1 AS SIGNED)');
     else if (toDb === 'postgresql') b = b.replace(/\bTO_NUMBER\s*\(\s*([^)]+)\s*\)/gi, 'CAST($1 AS INTEGER)');
   } else if (fromDb === 'mysql') {
-    if (toDb === 'oracle') b = b.replace(/\bCAST\s*\(\s*((?:[^,()]+|\([^)]*\))+)\s+AS\s+SIGNED(?:\s+INTEGER)?\s*\)/gi, 'TO_NUMBER($1)');
-    else if (toDb === 'postgresql') b = b.replace(/\bCAST\s*\(\s*((?:[^,()]+|\([^)]*\))+)\s+AS\s+SIGNED(?:\s+INTEGER)?\s*\)/gi, 'CAST($1 AS INTEGER)');
+    if (toDb === 'oracle') b = b.replace(/\bCAST\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+)\s+AS\s+SIGNED(?:\s+INTEGER)?\s*\)/gi, 'TO_NUMBER($1)');
+    else if (toDb === 'postgresql') b = b.replace(/\bCAST\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+)\s+AS\s+SIGNED(?:\s+INTEGER)?\s*\)/gi, 'CAST($1 AS INTEGER)');
   } else if (fromDb === 'postgresql') {
     b = b.replace(/(\w+)::INTEGER/gi, function(m, v) {
       if (toDb === 'oracle') return 'TO_NUMBER(' + v + ')';
@@ -2993,30 +2890,37 @@ function transformBody(body, fromDb, toDb) {
 
   // TO_CHAR / DATE_FORMAT (with format string conversion) - use nested-paren-aware first arg
   if (fromDb === 'oracle' && toDb === 'mysql') {
-    b = b.replace(/\bTO_CHAR\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "DATE_FORMAT(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+    b = b.replace(/\bTO_CHAR\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "DATE_FORMAT(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
   } else if (fromDb === 'mysql' && toDb === 'oracle') {
-    b = b.replace(/\bDATE_FORMAT\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "TO_CHAR(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+    b = b.replace(/\bDATE_FORMAT\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "TO_CHAR(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
   } else if (fromDb === 'mysql' && toDb === 'postgresql') {
-    b = b.replace(/\bDATE_FORMAT\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "to_char(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+    b = b.replace(/\bDATE_FORMAT\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "to_char(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
   } else if (fromDb === 'postgresql' && toDb === 'mysql') {
-    b = b.replace(/\bTO_CHAR\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "DATE_FORMAT(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+    b = b.replace(/\bTO_CHAR\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "DATE_FORMAT(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+  }
+
+  // Single-arg TO_CHAR (number-to-string, no format) -> CAST AS CHAR / ::TEXT
+  if (fromDb === 'oracle' && toDb === 'mysql') {
+    b = b.replace(/\bTO_CHAR\s*\(\s*([^,)]+)\s*\)/gi, 'CAST($1 AS CHAR)');
+  } else if (fromDb === 'oracle' && toDb === 'postgresql') {
+    b = b.replace(/\bTO_CHAR\s*\(\s*([^,)]+)\s*\)/gi, '$1::TEXT');
   }
 
   // TO_DATE / STR_TO_DATE - use nested-paren-aware first arg
   if (fromDb === 'oracle' && toDb === 'mysql') {
-    b = b.replace(/\bTO_DATE\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "STR_TO_DATE(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+    b = b.replace(/\bTO_DATE\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "STR_TO_DATE(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
   } else if (fromDb === 'mysql') {
-    if (toDb === 'oracle') b = b.replace(/\bSTR_TO_DATE\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "TO_DATE(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
-    else if (toDb === 'postgresql') b = b.replace(/\bSTR_TO_DATE\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "to_date(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+    if (toDb === 'oracle') b = b.replace(/\bSTR_TO_DATE\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "TO_DATE(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+    else if (toDb === 'postgresql') b = b.replace(/\bSTR_TO_DATE\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "to_date(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
   } else if (fromDb === 'postgresql' && toDb === 'mysql') {
-    b = b.replace(/\bTO_DATE\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "STR_TO_DATE(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
+    b = b.replace(/\bTO_DATE\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*'([^']+)'\s*\)/gi, function(m, expr, fmt) { return "STR_TO_DATE(" + expr.trim() + ", '" + _convertDateFormat(fmt, fromDb, toDb) + "')"; });
   }
 
   // SUBSTR / SUBSTRING
   if (fromDb === 'postgresql' && (toDb === 'oracle' || toDb === 'mysql')) {
     b = b.replace(/\bSUBSTRING\s*\(\s*((?:[^,()]+|\([^)]*\))+?)\s+FROM\s+(\S+)\s+FOR\s+(\S+)\s*\)/gi, 'SUBSTR($1, $2, $3)');
   } else if ((fromDb === 'oracle' || fromDb === 'mysql') && toDb === 'postgresql') {
-    b = b.replace(/\bSUBSTR\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*((?:[^,()]+|\([^)]*\))+),\s*((?:[^,()]+|\([^)]*\))*[^)]*)\)/gi, 'SUBSTRING($1 FROM $2 FOR $3)');
+    b = b.replace(/\bSUBSTR\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*((?:[^,()]+|\([^)]*\))*[^)]*)\)/gi, 'SUBSTRING($1 FROM $2 FOR $3)');
   }
   // Oracle SUBSTR → MySQL SUBSTRING (comma-style)
   if (fromDb === 'oracle' && toDb === 'mysql') {
@@ -3118,16 +3022,62 @@ function transformBody(body, fromDb, toDb) {
   // EXCEPTION handling
   if (fromDb === 'oracle' || fromDb === 'postgresql') {
     if (toDb === 'mysql') {
-      // Extract EXCEPTION block and comment it out entirely
+      // Convert EXCEPTION block to MySQL DECLARE EXIT HANDLER
       b = b.replace(/\bEXCEPTION\b([\s\S]*?)$/i, function(match, exBlock) {
-        const lines = exBlock.split('\n');
-        const commented = lines.map(function(l) {
-          const trimmed = l.trim();
-          if (!trimmed) return '';
-          if (/^\s*--/.test(l)) return l;
-          return '  -- ' + trimmed;
-        }).filter(function(l) { return l !== '' || true; }).join('\n');
-        return '-- [注意: ' + (fromDb === 'oracle' ? 'Oracle' : 'PostgreSQL') + ' EXCEPTION 块无法直接转换为 MySQL，请手动改写为 DECLARE HANDLER]\n' + commented;
+        // Try to extract WHEN OTHERS THEN block
+        const othersMatch = exBlock.match(/WHEN\s+OTHERS\s+THEN([\s\S]*?)(?=WHEN\s+\w|$)/i);
+        const nodataMatch = exBlock.match(/WHEN\s+NO_DATA_FOUND\s+THEN([\s\S]*?)(?=WHEN\s+\w|$)/i);
+
+        let handlerBody = '';
+        if (othersMatch) {
+          let body = othersMatch[1].trim();
+          // Remove END; at the very end if present
+          body = body.replace(/\bEND\b\s*\w*\s*;?\s*$/, '').trim();
+          handlerBody = body;
+        }
+
+        let result = '';
+        // Generate NOT FOUND handler if NO_DATA_FOUND exists
+        if (nodataMatch) {
+          let ndBody = nodataMatch[1].trim().replace(/\bEND\b\s*\w*\s*;?\s*$/, '').trim();
+          result += '-- [MySQL 异常处理: NO_DATA_FOUND]\n';
+          result += '  -- DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN\n';
+          const ndLines = ndBody.split('\n');
+          for (let li = 0; li < ndLines.length; li++) {
+            const tl = ndLines[li].trim();
+            if (tl) result += '  --   ' + tl + '\n';
+          }
+          result += '  -- END;\n';
+        }
+
+        // Generate EXIT HANDLER FOR SQLEXCEPTION as real code
+        // The _genMySQLProcedure will extract DECLARE lines to the top of BEGIN block
+        if (handlerBody) {
+          result += 'DECLARE v_error_msg VARCHAR(2000);\n';
+          result += 'DECLARE v_sqlstate CHAR(5);\n';
+          result += 'DECLARE EXIT HANDLER FOR SQLEXCEPTION\n';
+          result += '  BEGIN\n';
+          result += '    GET DIAGNOSTICS CONDITION 1\n';
+          result += '      v_error_msg = MESSAGE_TEXT,\n';
+          result += '      v_sqlstate = RETURNED_SQLSTATE;\n';
+          // Include the original handler body lines, converted
+          const hLines = handlerBody.split('\n');
+          for (let li = 0; li < hLines.length; li++) {
+            const tl = hLines[li].trim();
+            if (!tl) continue;
+            if (/^\s*RAISE\s*;/i.test(tl)) {
+              result += '    RESIGNAL;\n';
+            } else if (/ROLLBACK/i.test(tl)) {
+              result += '    ROLLBACK;\n';
+            } else {
+              result += '    ' + tl + '\n';
+            }
+          }
+          result += '  END;';
+        } else {
+          result += '-- [注意: Oracle/PG EXCEPTION 块需手动改写为 MySQL DECLARE HANDLER]';
+        }
+        return result;
       });
     }
   } else if (fromDb === 'mysql') {
@@ -3313,6 +3263,58 @@ function transformBody(body, fromDb, toDb) {
     b = b.replace(/\bELSEIF\b/gi, 'ELSIF');
   }
 
+  // EXECUTE IMMEDIATE / dynamic SQL
+  if (fromDb === 'oracle' && toDb === 'postgresql') {
+    b = b.replace(/\bEXECUTE\s+IMMEDIATE\b/gi, 'EXECUTE');
+  } else if (fromDb === 'oracle' && toDb === 'mysql') {
+    // Handle EXECUTE IMMEDIATE ... INTO ... USING ... patterns
+    // Must match before the general assignment so we don't double-convert
+    b = b.replace(/^(\s*)EXECUTE\s+IMMEDIATE\s+([^\n]+?)(?:\s+INTO\s+([^\n]+?))?(?:\s+USING\s+([^\n]+?))?\s*;/gim, function(m, indent, expr, intoVars, usingVars) {
+      // Skip if inside a comment line
+      if (/^\s*--/.test(m)) return m;
+      var v = expr.trim();
+      var result = indent + 'SET @_dyn_sql = ' + v + ';\n' + indent + 'PREPARE _dyn_stmt FROM @_dyn_sql;';
+      if (usingVars) {
+        // Convert bind variables to user variables for EXECUTE ... USING
+        var uVars = usingVars.trim().split(/\s*,\s*/);
+        var uSets = [];
+        var uRefs = [];
+        for (var ui = 0; ui < uVars.length; ui++) {
+          var uv = uVars[ui].trim();
+          uSets.push('SET @_p' + ui + ' = ' + uv + ';');
+          uRefs.push('@_p' + ui);
+        }
+        result += '\n' + indent + uSets.join('\n' + indent);
+        result += '\n' + indent + 'EXECUTE _dyn_stmt USING ' + uRefs.join(', ') + ';';
+      } else {
+        result += '\n' + indent + 'EXECUTE _dyn_stmt;';
+      }
+      if (intoVars) {
+        result += '\n' + indent + '-- [注意: MySQL PREPARE/EXECUTE 不支持 INTO, 请用 SELECT...INTO 替代]';
+        result += '\n' + indent + '-- 原始 INTO: ' + intoVars.trim();
+      }
+      result += '\n' + indent + 'DEALLOCATE PREPARE _dyn_stmt;';
+      return result;
+    });
+  } else if (fromDb === 'postgresql' && toDb === 'oracle') {
+    b = b.replace(/\bEXECUTE\s+(?!IMMEDIATE\b)([^;]+);/gi, function(m, expr) {
+      if (/^\s*(stmt|_dyn_stmt)\b/i.test(expr)) return m;
+      return 'EXECUTE IMMEDIATE ' + expr.trim() + ';';
+    });
+  } else if (fromDb === 'postgresql' && toDb === 'mysql') {
+    b = b.replace(/\bEXECUTE\s+(?!IMMEDIATE\b)([^;]+);/gi, function(m, expr) {
+      var v = expr.trim();
+      if (/^\s*(stmt|_dyn_stmt)\b/i.test(v)) return m;
+      return 'SET @_dyn_sql = ' + v + ';\n  PREPARE _dyn_stmt FROM @_dyn_sql;\n  EXECUTE _dyn_stmt;\n  DEALLOCATE PREPARE _dyn_stmt;';
+    });
+  } else if (fromDb === 'mysql') {
+    // MySQL PREPARE/EXECUTE/DEALLOCATE -> Oracle EXECUTE IMMEDIATE or PG EXECUTE
+    b = b.replace(/SET\s+@(\w+)\s*=\s*([^;]+);\s*\n\s*PREPARE\s+(\w+)\s+FROM\s+@\1;\s*\n\s*EXECUTE\s+\3;\s*\n\s*DEALLOCATE\s+PREPARE\s+\3;/gi, function(m, varName, expr) {
+      if (toDb === 'oracle') return 'EXECUTE IMMEDIATE ' + expr.trim() + ';';
+      return 'EXECUTE ' + expr.trim() + ';';
+    });
+  }
+
   // Assignment: := -> SET (Oracle/PG -> MySQL)
   if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
     b = b.replace(/^(\s*)(\w+)\s*:=\s*(.+);/gm, '$1SET $2 = $3;');
@@ -3328,13 +3330,130 @@ function transformBody(body, fromDb, toDb) {
     });
   }
 
-  // WHILE LOOP <-> WHILE DO
+  // WHILE LOOP <-> WHILE DO, and basic LOOP for MySQL
   if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
-    b = b.replace(/\bWHILE\b(.+?)\bLOOP\b/gi, 'WHILE$1DO');
-    b = b.replace(/\bEND\s+LOOP\b/gi, 'END WHILE');
+    // Convert WHILE...LOOP to WHILE...DO and track which END LOOPs need END WHILE
+    const lines = b.split('\n');
+    const loopStack = []; // track loop types
+    for (let li = 0; li < lines.length; li++) {
+      if (/\bWHILE\b.+\bLOOP\b/i.test(lines[li])) {
+        lines[li] = lines[li].replace(/\bWHILE\b(.+?)\bLOOP\b/gi, 'WHILE$1DO');
+        loopStack.push('while');
+      } else if (/\bFOR\b.+\bLOOP\b/i.test(lines[li])) {
+        loopStack.push('for'); // FOR loops become WHILE in earlier conversion
+      } else if (/^\s*LOOP\b/i.test(lines[li])) {
+        loopStack.push('basic');
+      } else if (/\bEND\s+LOOP\b/i.test(lines[li])) {
+        const loopType = loopStack.pop();
+        if (loopType === 'while' || loopType === 'for') {
+          lines[li] = lines[li].replace(/\bEND\s+LOOP\b/gi, 'END WHILE');
+        }
+        // basic loops keep END LOOP (MySQL supports it)
+      }
+    }
+    b = lines.join('\n');
   } else if (fromDb === 'mysql' && (toDb === 'oracle' || toDb === 'postgresql')) {
     b = b.replace(/\bWHILE\b(.+?)\bDO\b/gi, 'WHILE$1LOOP');
     b = b.replace(/\bEND\s+WHILE\b/gi, 'END LOOP');
+  }
+
+  // Cursor declaration: Oracle "CURSOR c IS SELECT..." -> PG "c CURSOR FOR SELECT..." / MySQL "DECLARE c CURSOR FOR SELECT..."
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') {
+      b = b.replace(/\bCURSOR\s+(\w+)\s+IS\b/gi, '$1 CURSOR FOR');
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bCURSOR\s+(\w+)\s+IS\b/gi, 'DECLARE $1 CURSOR FOR');
+    }
+  } else if (fromDb === 'postgresql') {
+    if (toDb === 'oracle') {
+      b = b.replace(/\b(\w+)\s+CURSOR\s+FOR\b/gi, 'CURSOR $1 IS');
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\b(\w+)\s+CURSOR\s+FOR\b/gi, 'DECLARE $1 CURSOR FOR');
+    }
+  } else if (fromDb === 'mysql') {
+    // MySQL: DECLARE c CURSOR FOR -> Oracle/PG
+    if (toDb === 'oracle') {
+      b = b.replace(/\bDECLARE\s+(\w+)\s+CURSOR\s+FOR\b/gi, 'CURSOR $1 IS');
+    } else if (toDb === 'postgresql') {
+      b = b.replace(/\bDECLARE\s+(\w+)\s+CURSOR\s+FOR\b/gi, '$1 CURSOR FOR');
+    }
+  }
+
+  // Cursor attributes: %NOTFOUND, %FOUND, %ISOPEN, %ROWCOUNT, %ROWTYPE
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') {
+      b = b.replace(/\b(\w+)%NOTFOUND\b/gi, 'NOT FOUND');
+      b = b.replace(/\b(\w+)%FOUND\b/gi, 'FOUND');
+      b = b.replace(/\b(\w+)%ISOPEN\b/gi, '/* $1 is open check */');
+      b = b.replace(/\b(\w+)%ROWTYPE\b/gi, 'RECORD');
+    } else if (toDb === 'mysql') {
+      // MySQL uses a handler variable for NOT FOUND
+      b = b.replace(/\b(\w+)%NOTFOUND\b/gi, 'done');
+      b = b.replace(/\b(\w+)%FOUND\b/gi, 'NOT done');
+      b = b.replace(/\b(\w+)%ISOPEN\b/gi, '/* [注意: MySQL 无 %ISOPEN] */');
+      b = b.replace(/\b(\w+)%ROWCOUNT\b/gi, 'ROW_COUNT()');
+      b = b.replace(/\b(\w+)%ROWTYPE\b/gi, '/* [注意: MySQL 无 %ROWTYPE, 请改用独立变量] */');
+    }
+  } else if (fromDb === 'postgresql') {
+    if (toDb === 'oracle') {
+      b = b.replace(/\bNOT\s+FOUND\b(?!\s+handler)/gi, function(m, offset) {
+        const before = b.substring(Math.max(0, offset - 30), offset);
+        if (/EXIT\s+WHEN\s*$/i.test(before) || /WHEN\s*$/i.test(before)) return 'C1%NOTFOUND';
+        return m;
+      });
+    }
+  }
+
+  // Numeric FOR loop: Oracle/PG "FOR i IN 1..10 LOOP...END LOOP" -> MySQL WHILE
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bFOR\s+(\w+)\s+IN\s+(\S+?)\s*\.\.\s*(\S+?)\s+LOOP\b/gi, function(m, varName, startVal, endVal) {
+      return 'SET ' + varName + ' = ' + startVal + ';\n  WHILE ' + varName + ' <= ' + endVal + ' DO';
+    });
+    // Add increment before the END LOOP that corresponds to a FOR-converted WHILE
+    // This is hard to do perfectly with regex, so add a comment
+  }
+  // MySQL WHILE back to FOR (reverse)
+  // This is complex to reverse, skip for now
+
+  // Query FOR loop: Oracle "FOR r IN (SELECT...) LOOP...END LOOP" -> MySQL cursor + WHILE
+  if (fromDb === 'oracle' && toDb === 'mysql') {
+    b = b.replace(/\bFOR\s+(\w+)\s+IN\s*\(([\s\S]*?)\)\s*LOOP\b/gi, function(m, recVar, query) {
+      return '-- [注意: MySQL 无查询 FOR 循环, 请改为显式游标]\n  -- 原始: FOR ' + recVar + ' IN (' + query.trim() + ') LOOP\n  BLOCK_FOR_CURSOR: BEGIN\n  DECLARE _done INT DEFAULT 0;\n  DECLARE _cur CURSOR FOR ' + query.trim() + ';\n  DECLARE CONTINUE HANDLER FOR NOT FOUND SET _done = 1;\n  OPEN _cur;\n  _for_loop: LOOP\n    FETCH _cur INTO ' + recVar + ';\n    IF _done THEN LEAVE _for_loop; END IF;';
+    });
+    // The corresponding END LOOP needs to become: END LOOP; CLOSE _cur; END;
+    // This is hard to match precisely, so we'll rely on the general END LOOP conversion
+  }
+  // Oracle query FOR -> PG: slight syntax difference
+  if (fromDb === 'oracle' && toDb === 'postgresql') {
+    // Oracle: FOR r IN (SELECT...) LOOP -> PG: FOR r IN SELECT... LOOP (no outer parens needed)
+    b = b.replace(/\bFOR\s+(\w+)\s+IN\s*\(([\s\S]*?)\)\s*LOOP\b/gi, 'FOR $1 IN $2 LOOP');
+  }
+
+  // MERGE INTO -> MySQL INSERT...ON DUPLICATE KEY UPDATE
+  if ((fromDb === 'oracle' || fromDb === 'postgresql') && toDb === 'mysql') {
+    b = b.replace(/\bMERGE\s+INTO\s+(\S+)\s+(\w+)\s*\n?\s*USING\s+(\S+)\s+(\w+)\s+ON\s*\(([^)]+)\)\s*\n?\s*WHEN\s+MATCHED\s+THEN\s+UPDATE\s+SET\s+([\s\S]*?)\s*\n?\s*WHEN\s+NOT\s+MATCHED\s+THEN\s+INSERT\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)\s*;/gi,
+      function(m, tgt, tgtAlias, src, srcAlias, onCond, updateSet, insertCols, insertVals) {
+        // Clean up: remove table alias prefixes
+        let cleanUpdate = updateSet.trim().replace(new RegExp('\\b' + tgtAlias + '\\.', 'gi'), '').replace(new RegExp('\\b' + srcAlias + '\\.', 'gi'), '');
+        let cleanVals = insertVals.trim().replace(new RegExp('\\b' + srcAlias + '\\.', 'gi'), '');
+        let cleanCols = insertCols.trim().replace(new RegExp('\\b' + tgtAlias + '\\.', 'gi'), '').replace(new RegExp('\\b' + srcAlias + '\\.', 'gi'), '');
+        // Build ON DUPLICATE KEY UPDATE clause from the UPDATE SET part
+        let updateParts = cleanUpdate.split(',').map(function(p) {
+          let parts = p.trim().split(/\s*=\s*/);
+          if (parts.length === 2) return parts[0].trim() + ' = VALUES(' + parts[0].trim() + ')';
+          return p.trim();
+        });
+        return 'INSERT INTO ' + tgt + ' (' + cleanCols + ')\nSELECT ' + cleanVals + '\n  FROM ' + src + '\nON DUPLICATE KEY UPDATE\n  ' + updateParts.join(',\n  ') + ';';
+      });
+  }
+
+  // DBMS_UTILITY.FORMAT_ERROR_BACKTRACE
+  if (fromDb === 'oracle') {
+    if (toDb === 'postgresql') {
+      b = b.replace(/\bDBMS_UTILITY\.FORMAT_ERROR_BACKTRACE\b/gi, 'PG_EXCEPTION_CONTEXT');
+    } else if (toDb === 'mysql') {
+      b = b.replace(/\bDBMS_UTILITY\.FORMAT_ERROR_BACKTRACE\b/gi, "/* [注意: MySQL 无等价的错误堆栈函数] */ ''");
+    }
   }
 
   // EXIT WHEN -> MySQL IF...LEAVE
@@ -3379,10 +3498,10 @@ function transformBody(body, fromDb, toDb) {
 
   // REGEXP_LIKE / REGEXP / ~ operator
   if (fromDb === 'oracle' && toDb === 'mysql') {
-    b = b.replace(/\bREGEXP_LIKE\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*([^)]+)\)/gi, '$1 REGEXP $2');
+    b = b.replace(/\bREGEXP_LIKE\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*([^)]+)\)/gi, '$1 REGEXP $2');
   } else if (fromDb === 'oracle' && toDb === 'postgresql') {
     // PG supports regexp_like (PG15+), or use ~ operator
-    b = b.replace(/\bREGEXP_LIKE\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*([^)]+)\)/gi, '$1 ~ $2');
+    b = b.replace(/\bREGEXP_LIKE\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*([^)]+)\)/gi, '$1 ~ $2');
   } else if (fromDb === 'mysql' && toDb === 'oracle') {
     b = b.replace(/\b(\S+)\s+REGEXP\s+('(?:[^']*)'|\S+)/gi, 'REGEXP_LIKE($1, $2)');
   } else if (fromDb === 'mysql' && toDb === 'postgresql') {
@@ -3398,33 +3517,6 @@ function transformBody(body, fromDb, toDb) {
   // CURRENT_TIMESTAMP -> Oracle SYSTIMESTAMP
   if (fromDb === 'mysql' && toDb === 'oracle') {
     b = b.replace(/\bCURRENT_TIMESTAMP\b/gi, 'SYSTIMESTAMP');
-  }
-
-  // EXECUTE IMMEDIATE / dynamic SQL
-  if (fromDb === 'oracle' && toDb === 'postgresql') {
-    b = b.replace(/\bEXECUTE\s+IMMEDIATE\b/gi, 'EXECUTE');
-  } else if (fromDb === 'oracle' && toDb === 'mysql') {
-    b = b.replace(/\bEXECUTE\s+IMMEDIATE\s+([^;]+);/gi, function(m, expr) {
-      var v = expr.trim();
-      return 'SET @_dyn_sql = ' + v + ';\n  PREPARE _dyn_stmt FROM @_dyn_sql;\n  EXECUTE _dyn_stmt;\n  DEALLOCATE PREPARE _dyn_stmt;';
-    });
-  } else if (fromDb === 'postgresql' && toDb === 'oracle') {
-    b = b.replace(/\bEXECUTE\s+(?!IMMEDIATE\b)([^;]+);/gi, function(m, expr) {
-      if (/^\s*(stmt|_dyn_stmt)\b/i.test(expr)) return m;
-      return 'EXECUTE IMMEDIATE ' + expr.trim() + ';';
-    });
-  } else if (fromDb === 'postgresql' && toDb === 'mysql') {
-    b = b.replace(/\bEXECUTE\s+(?!IMMEDIATE\b)([^;]+);/gi, function(m, expr) {
-      var v = expr.trim();
-      if (/^\s*(stmt|_dyn_stmt)\b/i.test(v)) return m;
-      return 'SET @_dyn_sql = ' + v + ';\n  PREPARE _dyn_stmt FROM @_dyn_sql;\n  EXECUTE _dyn_stmt;\n  DEALLOCATE PREPARE _dyn_stmt;';
-    });
-  } else if (fromDb === 'mysql') {
-    // MySQL PREPARE/EXECUTE/DEALLOCATE -> Oracle EXECUTE IMMEDIATE or PG EXECUTE
-    b = b.replace(/SET\s+@(\w+)\s*=\s*([^;]+);\s*\n\s*PREPARE\s+(\w+)\s+FROM\s+@\1;\s*\n\s*EXECUTE\s+\3;\s*\n\s*DEALLOCATE\s+PREPARE\s+\3;/gi, function(m, varName, expr) {
-      if (toDb === 'oracle') return 'EXECUTE IMMEDIATE ' + expr.trim() + ';';
-      return 'EXECUTE ' + expr.trim() + ';';
-    });
   }
 
   // SQLCODE / SQLERRM conversions
@@ -3509,6 +3601,12 @@ function _parseOracleVarDecl(declBlock) {
     const s = parts[i].trim();
     if (!s) continue;
     if (/^--/.test(s)) { vars.push({ raw: s + ';' }); continue; }
+    // Detect cursor declarations: CURSOR name IS query
+    const cursorMatch = s.match(/^CURSOR\s+(\w+)\s+IS\s+([\s\S]+)$/i);
+    if (cursorMatch) {
+      vars.push({ cursor: true, name: cursorMatch[1], query: cursorMatch[2].trim() });
+      continue;
+    }
     const m = s.match(/^(\w+)\s+(.+?)(?:\s*:=\s*(.+))?$/i);
     if (m) {
       vars.push({ name: m[1], type: m[2].trim(), defaultVal: m[3] ? m[3].trim() : null });
@@ -3562,6 +3660,7 @@ function _convertSingleFunction(input, sourceDb, targetDb) {
   const transformedBody = transformBody(parsed.body, sourceDb, targetDb);
   const mappedVars = parsed.vars.map(function(v) {
     if (v.raw) return v;
+    if (v.cursor) return { cursor: true, name: v.name, query: transformBody(v.query, sourceDb, targetDb) };
     return { name: v.name, type: mapParamType(v.type, sourceDb, targetDb), defaultVal: v.defaultVal };
   });
 
@@ -3719,6 +3818,7 @@ function _genOracleFunction(name, params, returnType, vars, body) {
   for (let i = 0; i < vars.length; i++) {
     const v = vars[i];
     if (v.raw) { out += '  ' + v.raw + '\n'; continue; }
+    if (v.cursor) { out += '  CURSOR ' + v.name + ' IS ' + v.query + ';\n'; continue; }
     out += '  ' + v.name + ' ' + v.type;
     if (v.defaultVal) out += ' := ' + v.defaultVal;
     out += ';\n';
@@ -3748,19 +3848,55 @@ function _genMySQLFunction(name, params, returnType, vars, body) {
   for (let j = 0; j < vars.length; j++) {
     const v = vars[j];
     if (v.raw) { out += '  ' + v.raw + '\n'; continue; }
+    if (v.cursor) { out += '  DECLARE ' + v.name + ' CURSOR FOR ' + v.query + ';\n'; continue; }
     out += '  DECLARE ' + v.name + ' ' + v.type;
     if (v.defaultVal) out += ' DEFAULT ' + v.defaultVal;
     out += ';\n';
   }
   // Clean body: remove leading/trailing whitespace and any extra BEGIN
   let cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '').replace(/^\s*BEGIN\b/i, '');
-  // MySQL requires all DECLARE at top of BEGIN block - extract any remaining DECLAREs from body
+  // MySQL requires all DECLARE at top of BEGIN block - extract DECLAREs from body
+  // Handle DECLARE EXIT/CONTINUE HANDLER ... BEGIN...END; as a multi-line block
   const bodyDeclares = [];
   const bodyOther = [];
-  cleanBody.replace(/^\n+/,'').split('\n').forEach(function(line) {
-    if (/^\s*DECLARE\s+/i.test(line)) bodyDeclares.push(line);
-    else bodyOther.push(line);
-  });
+  const bodyLines = cleanBody.replace(/^\n+/,'').split('\n');
+  let inHandler = false;
+  let handlerDepth = 0;
+  let handlerLines = [];
+  for (let li = 0; li < bodyLines.length; li++) {
+    const line = bodyLines[li];
+    if (inHandler) {
+      handlerLines.push(line);
+      if (/\bBEGIN\b/i.test(line)) handlerDepth++;
+      if (/\bEND\b\s*;/i.test(line)) {
+        handlerDepth--;
+        if (handlerDepth <= 0) {
+          bodyDeclares.push(handlerLines.join('\n'));
+          handlerLines = [];
+          inHandler = false;
+        }
+      }
+    } else if (/^\s*DECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+/i.test(line)) {
+      // Check if single-line handler (no BEGIN block, ends with ;)
+      if (/;\s*$/.test(line) && !/\bBEGIN\b/i.test(line)) {
+        bodyDeclares.push(line);
+      } else {
+        inHandler = true;
+        handlerDepth = 0;
+        handlerLines = [line];
+        if (/\bBEGIN\b/i.test(line)) handlerDepth++;
+        if (/\bEND\b\s*;/i.test(line)) {
+          bodyDeclares.push(handlerLines.join('\n'));
+          handlerLines = [];
+          inHandler = false;
+        }
+      }
+    } else if (/^\s*DECLARE\s+/i.test(line)) {
+      bodyDeclares.push(line);
+    } else {
+      bodyOther.push(line);
+    }
+  }
   if (bodyDeclares.length > 0) {
     out += bodyDeclares.join('\n') + '\n';
   }
@@ -3789,6 +3925,7 @@ function _genPGFunction(name, params, returnType, vars, body) {
     for (let i = 0; i < vars.length; i++) {
       const v = vars[i];
       if (v.raw) { out += '  ' + v.raw + '\n'; continue; }
+      if (v.cursor) { out += '  ' + v.name + ' CURSOR FOR ' + v.query + ';\n'; continue; }
       out += '  ' + v.name + ' ' + v.type;
       if (v.defaultVal) out += ' := ' + v.defaultVal;
       out += ';\n';
@@ -3845,6 +3982,7 @@ function _convertSingleProcedure(input, sourceDb, targetDb) {
   const transformedBody = transformBody(parsed.body, sourceDb, targetDb);
   const mappedVars = parsed.vars.map(function(v) {
     if (v.raw) return v;
+    if (v.cursor) return { cursor: true, name: v.name, query: transformBody(v.query, sourceDb, targetDb) };
     return { name: v.name, type: mapParamType(v.type, sourceDb, targetDb), defaultVal: v.defaultVal };
   });
 
@@ -3999,6 +4137,7 @@ function _genOracleProcedure(name, params, vars, body) {
   for (let i = 0; i < vars.length; i++) {
     const v = vars[i];
     if (v.raw) { out += '  ' + v.raw + '\n'; continue; }
+    if (v.cursor) { out += '  CURSOR ' + v.name + ' IS ' + v.query + ';\n'; continue; }
     out += '  ' + v.name + ' ' + v.type;
     if (v.defaultVal) out += ' := ' + v.defaultVal;
     out += ';\n';
@@ -4023,18 +4162,54 @@ function _genMySQLProcedure(name, params, vars, body) {
   for (let i = 0; i < vars.length; i++) {
     const v = vars[i];
     if (v.raw) { out += '  ' + v.raw + '\n'; continue; }
+    if (v.cursor) { out += '  DECLARE ' + v.name + ' CURSOR FOR ' + v.query + ';\n'; continue; }
     out += '  DECLARE ' + v.name + ' ' + v.type;
     if (v.defaultVal) out += ' DEFAULT ' + v.defaultVal;
     out += ';\n';
   }
   let cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '').replace(/^\s*BEGIN\b/i, '');
-  // MySQL requires all DECLARE at top of BEGIN block - extract any remaining DECLAREs from body
+  // MySQL requires all DECLARE at top of BEGIN block - extract DECLAREs from body
+  // Handle DECLARE EXIT/CONTINUE HANDLER ... BEGIN...END; as a multi-line block
   const bodyDeclares = [];
   const bodyOther = [];
-  cleanBody.replace(/^\n+/,'').split('\n').forEach(function(line) {
-    if (/^\s*DECLARE\s+/i.test(line)) bodyDeclares.push(line);
-    else bodyOther.push(line);
-  });
+  const bodyLines = cleanBody.replace(/^\n+/,'').split('\n');
+  let inHandler = false;
+  let handlerDepth = 0;
+  let handlerLines = [];
+  for (let li = 0; li < bodyLines.length; li++) {
+    const line = bodyLines[li];
+    if (inHandler) {
+      handlerLines.push(line);
+      if (/\bBEGIN\b/i.test(line)) handlerDepth++;
+      if (/\bEND\b\s*;/i.test(line)) {
+        handlerDepth--;
+        if (handlerDepth <= 0) {
+          bodyDeclares.push(handlerLines.join('\n'));
+          handlerLines = [];
+          inHandler = false;
+        }
+      }
+    } else if (/^\s*DECLARE\s+(EXIT|CONTINUE)\s+HANDLER\s+/i.test(line)) {
+      // Check if single-line handler (no BEGIN block, ends with ;)
+      if (/;\s*$/.test(line) && !/\bBEGIN\b/i.test(line)) {
+        bodyDeclares.push(line);
+      } else {
+        inHandler = true;
+        handlerDepth = 0;
+        handlerLines = [line];
+        if (/\bBEGIN\b/i.test(line)) handlerDepth++;
+        if (/\bEND\b\s*;/i.test(line)) {
+          bodyDeclares.push(handlerLines.join('\n'));
+          handlerLines = [];
+          inHandler = false;
+        }
+      }
+    } else if (/^\s*DECLARE\s+/i.test(line)) {
+      bodyDeclares.push(line);
+    } else {
+      bodyOther.push(line);
+    }
+  }
   if (bodyDeclares.length > 0) {
     out += bodyDeclares.join('\n') + '\n';
   }
@@ -4061,6 +4236,7 @@ function _genPGProcedure(name, params, vars, body) {
     for (let i = 0; i < vars.length; i++) {
       const v = vars[i];
       if (v.raw) { out += '  ' + v.raw + '\n'; continue; }
+      if (v.cursor) { out += '  ' + v.name + ' CURSOR FOR ' + v.query + ';\n'; continue; }
       out += '  ' + v.name + ' ' + v.type;
       if (v.defaultVal) out += ' := ' + v.defaultVal;
       out += ';\n';
