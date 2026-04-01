@@ -140,49 +140,12 @@ textarea::placeholder{color:var(--text-muted)}
 .scroll-top.visible{opacity:1;pointer-events:auto;transform:translateY(0)}
 .scroll-top:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
 
-/* ===== SUGGESTION BOX ===== */
-.suggest-fab{position:fixed;bottom:20px;right:68px;z-index:200;width:44px;height:44px;border-radius:50%;border:none;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(99,102,241,.4);transition:all .25s}
-.suggest-fab:hover{transform:scale(1.1);box-shadow:0 6px 20px rgba(99,102,241,.5)}
-.suggest-fab .badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;border-radius:9px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px;box-shadow:0 1px 3px rgba(0,0,0,.2)}
-.suggest-panel{position:fixed;bottom:76px;right:20px;z-index:201;width:340px;max-height:520px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:0 12px 40px rgba(0,0,0,.15);display:flex;flex-direction:column;overflow:hidden;transform:scale(.9) translateY(10px);opacity:0;pointer-events:none;transition:all .25s ease}
-.suggest-panel.open{transform:scale(1) translateY(0);opacity:1;pointer-events:auto}
-.suggest-panel-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff}
-.suggest-panel-header h3{font-size:14px;font-weight:700;margin:0}
-.suggest-panel-close{background:none;border:none;color:#fff;font-size:18px;cursor:pointer;opacity:.8;transition:opacity .15s;padding:0 2px}
-.suggest-panel-close:hover{opacity:1}
-.suggest-tabs{display:flex;border-bottom:1px solid var(--border)}
-.suggest-tab{flex:1;padding:8px;font-size:12px;font-weight:600;text-align:center;border:none;background:none;color:var(--text-muted);cursor:pointer;transition:all .15s;border-bottom:2px solid transparent}
-.suggest-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
-.suggest-form{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
-.suggest-form input,.suggest-form textarea{border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-size:13px;font-family:var(--font-body);color:var(--text);background:var(--bg);transition:border-color .15s;resize:none}
-.suggest-form input:focus,.suggest-form textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.08)}
-.suggest-form textarea{min-height:80px;line-height:1.5}
-.suggest-submit{padding:8px 16px;border:none;border-radius:var(--radius-sm);background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
-.suggest-submit:hover{opacity:.9;transform:translateY(-1px)}
-.suggest-submit:disabled{opacity:.5;cursor:not-allowed;transform:none}
-.suggest-list{flex:1;overflow-y:auto;padding:8px;max-height:360px}
-.suggest-item{padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:6px;font-size:12px;background:var(--bg-secondary);position:relative}
-.suggest-item-name{font-weight:600;color:var(--accent);font-size:11px;margin-bottom:3px}
-.suggest-item-text{color:var(--text);line-height:1.5}
-.suggest-item-time{font-size:10px;color:var(--text-muted);margin-top:4px}
-.suggest-item-actions{position:absolute;top:8px;right:8px;display:flex;gap:4px}
-.suggest-item-btn{width:22px;height:22px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-muted);font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
-.suggest-item-btn:hover{border-color:var(--accent);color:var(--accent)}
-.suggest-item-btn.del:hover{border-color:var(--red);color:var(--red)}
-.suggest-empty{text-align:center;padding:30px 16px;color:var(--text-muted);font-size:13px}
-.suggest-loading{text-align:center;padding:20px 16px;color:var(--text-muted);font-size:12px}
-.suggest-loading::after{content:'';display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-left:6px;vertical-align:middle}
-@keyframes spin{to{transform:rotate(360deg)}}
-.suggest-source{display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;background:#dbeafe;color:#2563eb;margin-left:6px;font-weight:600}
-.suggest-refresh-btn{background:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 10px;font-size:11px;color:var(--text-secondary);cursor:pointer;transition:all .15s}
-.suggest-refresh-btn:hover{border-color:var(--accent);color:var(--accent)}
-
 /* ===== LIVE2D MIKU MASCOT (Right Side) ===== */
-#miku-widget{position:fixed;bottom:0;right:0;z-index:100;cursor:pointer}
-#miku-widget canvas{position:relative;display:block}
-#miku-tip{position:absolute;top:-10px;right:10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:8px 14px;font-size:12px;color:var(--text);box-shadow:var(--shadow-md);white-space:nowrap;opacity:0;transition:opacity .3s;pointer-events:none;max-width:200px;white-space:normal;line-height:1.5}
-#miku-tip::after{content:'';position:absolute;bottom:-6px;right:30px;transform:rotate(45deg);width:10px;height:10px;background:var(--bg);border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
-#miku-name{position:absolute;bottom:8px;right:10px;background:rgba(57,197,187,.85);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;pointer-events:none;letter-spacing:.5px}
+#miku-live2d-wrap{position:fixed;top:50%;right:0;z-index:100;transform:translateY(-50%);cursor:pointer}
+#miku-tip{position:absolute;top:-10px;right:70px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:8px 14px;font-size:12px;color:var(--text);box-shadow:var(--shadow-md);opacity:0;transition:opacity .3s;pointer-events:none;max-width:180px;line-height:1.5;z-index:101}
+#miku-tip::after{content:'';position:absolute;right:-6px;top:50%;transform:translateY(-50%) rotate(45deg);width:10px;height:10px;background:var(--bg);border-right:1px solid var(--border);border-top:1px solid var(--border)}
+#miku-name-tag{position:absolute;bottom:4px;left:50%;transform:translateX(-50%);background:rgba(57,197,187,.85);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;pointer-events:none;letter-spacing:.5px;white-space:nowrap}
+#miku-live2d-wrap #live2dcanvas{position:relative !important;left:auto !important;right:auto !important;bottom:auto !important;top:auto !important}
 
 /* ===== MISC ===== */
 .kbd{display:inline-block;padding:1px 5px;border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:var(--font-code);color:var(--text-muted);background:var(--bg-secondary);margin-left:6px;vertical-align:middle}
@@ -232,9 +195,7 @@ textarea::placeholder{color:var(--text-muted)}
   .sidebar{width:280px;min-width:280px}
   .sidebar-brand{height:48px;padding:12px 16px}
   .scroll-top{bottom:12px;right:12px;width:32px;height:32px;font-size:14px}
-  .suggest-fab{bottom:12px;right:52px;width:38px;height:38px;font-size:17px}
-  .suggest-panel{width:calc(100vw - 24px);right:12px;bottom:60px;max-height:70vh}
-  #miku-widget{display:none !important}
+  #miku-live2d-wrap{display:none !important}
   .swap-btn{padding:5px 8px;font-size:14px}
   .arrow-icon{font-size:14px}
 }
@@ -671,40 +632,6 @@ $$;</pre>
 
       <!-- Scroll to top button -->
       <button class="scroll-top" :class="{visible: showScrollTop}" @click="scrollToTop" title="&#22238;&#21040;&#39030;&#37096;">&#8593;</button>
-
-      <!-- Suggestion Floating Widget -->
-      <button class="suggest-fab" @click="suggestOpen = !suggestOpen" title="提交建议">
-        <span>&#128172;</span>
-        <span class="badge" v-if="suggestUnread > 0">{{suggestUnread}}</span>
-      </button>
-      <div class="suggest-panel" :class="{open: suggestOpen}">
-        <div class="suggest-panel-header">
-          <h3>&#128172; 意见建议箱</h3>
-          <button class="suggest-panel-close" @click="suggestOpen = false">&times;</button>
-        </div>
-        <div class="suggest-tabs">
-          <button class="suggest-tab" :class="{active: suggestTab === 'write'}" @click="suggestTab = 'write'">提建议</button>
-          <button class="suggest-tab" :class="{active: suggestTab === 'list'}" @click="suggestTab = 'list'; fetchGithubSuggestions()">查看 ({{suggestions.length}})</button>
-        </div>
-        <div v-if="suggestTab === 'write'" class="suggest-form">
-          <input v-model="suggestName" placeholder="昵称（选填）" maxlength="30"/>
-          <textarea v-model="suggestText" placeholder="请输入您的建议、bug反馈或功能需求..." maxlength="1000" rows="4"></textarea>
-          <button class="suggest-submit" @click="submitToGithub" :disabled="!suggestText.trim()">提交建议到 GitHub</button>
-          <div style="font-size:10px;color:var(--text-muted);line-height:1.4">建议将以 GitHub Issue 形式公开提交，所有人可见。需要 GitHub 账号登录。</div>
-        </div>
-        <div v-else class="suggest-list">
-          <div style="display:flex;justify-content:flex-end;padding:6px 4px 2px">
-            <button class="suggest-refresh-btn" @click="fetchGithubSuggestions()" :disabled="suggestLoading">&#x1F504; 刷新</button>
-          </div>
-          <div v-if="suggestLoading" class="suggest-loading">加载中</div>
-          <div v-else-if="suggestions.length === 0" class="suggest-empty">暂无建议，快来提第一条吧！</div>
-          <div v-for="(s, i) in suggestions" :key="i" class="suggest-item">
-            <div class="suggest-item-name">{{s.name}} <span class="suggest-source">GitHub</span></div>
-            <div class="suggest-item-text">{{s.text}}</div>
-            <div class="suggest-item-time">{{s.time}}</div>
-          </div>
-        </div>
-      </div>
 
       <!-- Live2D Mascot (Hatsune Miku) - auto-injected by live2d-widget -->
     </div>
@@ -5171,67 +5098,7 @@ const app = createApp({
     const showScrollTop = ref(false);
     function scrollToTop() { window.scrollTo({ top: 0, behavior: 'smooth' }); }
 
-    // ========== Suggestion Box (GitHub Issues Backend) ==========
-    const suggestOpen = ref(false);
-    const suggestTab = ref('write');
-    const suggestName = ref('');
-    const suggestText = ref('');
-    const suggestions = ref([]);
-    const suggestUnread = ref(0);
-    const suggestLoading = ref(false);
-    const _suggestFetched = ref(false);
-
-    function loadSuggestions() {
-      // Load cached suggestions from localStorage for instant display
-      try {
-        const raw = localStorage.getItem('sql_workbench_gh_suggestions');
-        if (raw) {
-          const data = JSON.parse(raw);
-          suggestions.value = data.items || [];
-          suggestUnread.value = data.unread || 0;
-        }
-      } catch(e) {}
-      // Fetch fresh data from GitHub in background
-      fetchGithubSuggestions();
-    }
-    function fetchGithubSuggestions() {
-      if (suggestLoading.value) return;
-      suggestLoading.value = true;
-      fetch('https://api.github.com/repos/GitZhengPeng/oracle-java-workbench/issues?labels=suggestion&state=all&per_page=50&sort=created&direction=desc')
-        .then(function(r) { return r.json(); })
-        .then(function(issues) {
-          if (!Array.isArray(issues)) { suggestLoading.value = false; return; }
-          var items = issues.map(function(iss) {
-            var bodyText = (iss.body || '').replace(/^## 建议\/反馈\s*\n+/, '').replace(/\n---\n提交者:.+$/s, '').trim();
-            var nameMatch = (iss.body || '').match(/提交者:\s*(.+)/);
-            var name = nameMatch ? nameMatch[1].trim() : iss.user.login;
-            var d = new Date(iss.created_at);
-            var timeStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
-            return { name: name, text: bodyText || iss.title.replace(/^\[建议\]\s*/, ''), time: timeStr, state: iss.state, number: iss.number };
-          });
-          var prevCount = suggestions.value.length;
-          suggestions.value = items;
-          if (!_suggestFetched.value && items.length > prevCount) {
-            suggestUnread.value = items.length - prevCount;
-          }
-          _suggestFetched.value = true;
-          // Cache to localStorage
-          try {
-            localStorage.setItem('sql_workbench_gh_suggestions', JSON.stringify({ items: items, unread: suggestUnread.value }));
-          } catch(e) {}
-          suggestLoading.value = false;
-        })
-        .catch(function() { suggestLoading.value = false; });
-    }
-    function submitToGithub() {
-      if (!suggestText.value.trim()) return;
-      var title = encodeURIComponent('[建议] ' + suggestText.value.trim().substring(0, 60));
-      var nameStr = suggestName.value.trim() || '匿名用户';
-      var body = encodeURIComponent('## 建议/反馈\n\n' + suggestText.value.trim() + '\n\n---\n提交者: ' + nameStr + '\n来源: SQL翻译工作台页面');
-      window.open('https://github.com/GitZhengPeng/oracle-java-workbench/issues/new?title=' + title + '&body=' + body + '&labels=suggestion', '_blank');
-      suggestText.value = '';
-      statusText.value = '正在跳转到 GitHub Issues...';
-    }
+    // (Suggestion box removed)
 
     // ========== Live2D Mascot (Hatsune Miku) ==========
     // Loaded via external live2d-widget, click canvas to switch outfit
@@ -5241,7 +5108,6 @@ const app = createApp({
     let keyHandler;
     let _scrollTicking = false;
     onMounted(() => {
-      loadSuggestions();
       scrollHandler = () => {
         if (!_scrollTicking) {
           window.requestAnimationFrame(() => {
@@ -5263,9 +5129,6 @@ const app = createApp({
       window.addEventListener('keydown', keyHandler);
       // Close floating panels on outside click
       document.addEventListener('click', function(e) {
-        if (suggestOpen.value && !e.target.closest('.suggest-panel') && !e.target.closest('.suggest-fab')) {
-          suggestOpen.value = false;
-        }
         // mascot panel handled by live2d-widget internally
       });
     });
@@ -5290,22 +5153,18 @@ const app = createApp({
       swapProcDbs, loadProcSample, clearProc, convertProc, copyProcOutput, saveProcOutput,
       // Shared
       statusText, fileInput, uploadFile, handleFileUpload,
-      showScrollTop, scrollToTop,
-      // Suggestion box (GitHub Issues)
-      suggestOpen, suggestTab, suggestName, suggestText, suggestions, suggestUnread, suggestLoading,
-      fetchGithubSuggestions, submitToGithub
+      showScrollTop, scrollToTop
     };
   }
 });
 app.mount('#app');
 </script>
 <!-- Live2D Miku Mascot Widget -->
-<div id="miku-widget">
+<div id="miku-live2d-wrap">
   <div id="miku-tip"></div>
-  <canvas id="live2d" width="280" height="320"></canvas>
-  <div id="miku-name">初音未来</div>
+  <div id="miku-name-tag">初音未来</div>
 </div>
-<script src="https://fastly.jsdelivr.net/gh/stevenjoezhang/live2d-widget@latest/live2d.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/live2d-widget@3.1.4/lib/L2Dwidget.min.js"></script>
 <script>
 (function() {
   var models = [
@@ -5321,41 +5180,55 @@ app.mount('#app');
   var currentModel = parseInt(localStorage.getItem('miku_model_idx')) || 0;
   if (currentModel >= models.length) currentModel = 0;
   var tip = document.getElementById('miku-tip');
-  var nameTag = document.getElementById('miku-name');
-  var canvas = document.getElementById('live2d');
+  var nameTag = document.getElementById('miku-name-tag');
   var tipTimer = null;
 
-  function showTip(text, duration) {
+  function showTip(text, dur) {
     tip.textContent = text;
     tip.style.opacity = '1';
     clearTimeout(tipTimer);
-    tipTimer = setTimeout(function() { tip.style.opacity = '0'; }, duration || 3000);
+    tipTimer = setTimeout(function() { tip.style.opacity = '0'; }, dur || 3000);
   }
 
-  function switchModel(idx) {
+  function loadModel(idx) {
     currentModel = idx % models.length;
     localStorage.setItem('miku_model_idx', currentModel);
     nameTag.textContent = models[currentModel].name;
-    try { loadlive2d('live2d', models[currentModel].url); } catch(e) {}
-    showTip(models[currentModel].tip, 3000);
+    // Remove previous Live2D canvas if exists
+    var prev = document.getElementById('live2dcanvas');
+    if (prev) prev.parentNode.removeChild(prev);
+    L2Dwidget.init({
+      model: { jsonPath: models[currentModel].url },
+      display: { position: 'right', width: 200, height: 280, hOffset: 0, vOffset: 0 },
+      mobile: { show: false },
+      react: { opacityDefault: 0.9, opacityOnHover: 1.0 },
+      dialog: { enable: false }
+    });
+    // Move the generated canvas wrapper into our container for right-center positioning
+    setTimeout(function() {
+      var cDiv = document.getElementById('live2dcanvas');
+      if (cDiv) {
+        var wrap = document.getElementById('miku-live2d-wrap');
+        wrap.appendChild(cDiv);
+      }
+    }, 800);
+    showTip(models[currentModel].tip, 3500);
   }
 
   // Initial load
   nameTag.textContent = models[currentModel].name;
-  try { loadlive2d('live2d', models[currentModel].url); } catch(e) {}
-  setTimeout(function() { showTip('嗨！点击我可以换造型哦~', 4000); }, 2000);
+  loadModel(currentModel);
+  setTimeout(function() { showTip('嗨！点击我可以换造型哦~', 4000); }, 3000);
 
-  // Click to switch
-  canvas.addEventListener('click', function(e) {
-    e.stopPropagation();
-    switchModel(currentModel + 1);
+  // Click to switch model
+  document.getElementById('miku-live2d-wrap').addEventListener('click', function(e) {
+    loadModel(currentModel + 1);
   });
 
   // Hide on mobile
   if (screen.width < 768) {
-    document.getElementById('miku-widget').style.display = 'none';
+    document.getElementById('miku-live2d-wrap').style.display = 'none';
   }
 })();
 </script>
-</body>
-</html>
+</body></html>
