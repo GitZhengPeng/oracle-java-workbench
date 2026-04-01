@@ -273,7 +273,6 @@ textarea::placeholder{color:var(--text-muted)}
           <div class="actions">
             <button class="btn" @click="loadSample">&#21152;&#36733;&#31034;&#20363;</button>
             <button class="btn" @click="uploadFile">&#19978;&#20256;&#25991;&#20214;</button>
-            <input type="file" ref="fileInput" accept=".sql,.txt,.ddl,.ora,.pgsql,.mysql" style="display:none" @change="handleFileUpload" aria-label="上传SQL文件"/>
             <button class="btn" @click="clearAll">&#28165;&#31354;</button>
             <button class="btn" @click="copyOutput">&#22797;&#21046;&#36755;&#20986;</button>
             <button class="btn" @click="saveOutput">&#20445;&#23384;&#25991;&#20214;</button>
@@ -620,6 +619,9 @@ $$;</pre>
         </section>
       </template>
 
+      <!-- Shared hidden file input (outside v-if sections so it always exists in DOM) -->
+      <input type="file" ref="fileInput" accept=".sql,.txt,.ddl,.ora,.pgsql,.mysql" style="display:none" @change="handleFileUpload" aria-label="上传SQL文件"/>
+
       <!-- Scroll to top button -->
       <button class="scroll-top" :class="{visible: showScrollTop}" @click="scrollToTop" title="&#22238;&#21040;&#39030;&#37096;">&#8593;</button>
     </div>
@@ -940,7 +942,7 @@ COMMENT ON COLUMN t_log_data.log_msg IS '日志内容';`
 
 /* ===== FUNC SAMPLES ===== */
 const FUNC_SAMPLES = {
-oracle: `-- 字符串格式化: 姓名脱敏
+oracle: `-- 字符串格式化: 姓名脱敏 (SUBSTR, ||, EXCEPTION)
 CREATE OR REPLACE FUNCTION FN_MASK_NAME(
     P_NAME IN VARCHAR2
 ) RETURN VARCHAR2
@@ -959,7 +961,7 @@ EXCEPTION
 END FN_MASK_NAME;
 /
 
--- 日期处理: 计算工作日差
+-- 日期处理: 计算工作日差 (WHILE LOOP, NVL, TO_CHAR)
 CREATE OR REPLACE FUNCTION FN_WORKDAY_DIFF(
     P_START_DATE IN DATE,
     P_END_DATE   IN DATE
@@ -983,7 +985,7 @@ EXCEPTION
 END FN_WORKDAY_DIFF;
 /
 
--- 查询带OUT参数: 获取客户余额与状态
+-- 查询带OUT参数: 获取客户余额与状态 (SELECT INTO, NO_DATA_FOUND)
 CREATE OR REPLACE FUNCTION FN_GET_CLIENT_BALANCE(
     P_CLIENT_NO  IN  VARCHAR2,
     P_STATUS     OUT VARCHAR2
@@ -1005,9 +1007,44 @@ EXCEPTION
         DBMS_OUTPUT.PUT_LINE('FN_GET_CLIENT_BALANCE error: ' || SQLERRM);
         RETURN -1;
 END FN_GET_CLIENT_BALANCE;
+/
+
+-- 动态SQL: 统计表行数 (EXECUTE IMMEDIATE)
+CREATE OR REPLACE FUNCTION FN_COUNT_TABLE(
+    P_TABLE_NAME IN VARCHAR2
+) RETURN NUMBER
+IS
+    V_SQL   VARCHAR2(500);
+    V_COUNT NUMBER;
+BEGIN
+    V_SQL := 'SELECT COUNT(*) FROM ' || P_TABLE_NAME;
+    EXECUTE IMMEDIATE V_SQL INTO V_COUNT;
+    RETURN V_COUNT;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('FN_COUNT_TABLE error: ' || SQLERRM);
+        RETURN -1;
+END FN_COUNT_TABLE;
+/
+
+-- FOR循环: 计算阶乘 (numeric FOR loop)
+CREATE OR REPLACE FUNCTION FN_FACTORIAL(
+    P_N IN NUMBER
+) RETURN NUMBER
+IS
+    V_RESULT NUMBER := 1;
+BEGIN
+    IF P_N < 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Input must be non-negative');
+    END IF;
+    FOR I IN 1..P_N LOOP
+        V_RESULT := V_RESULT * I;
+    END LOOP;
+    RETURN V_RESULT;
+END FN_FACTORIAL;
 /`,
 
-mysql: `-- 字符串格式化: 姓名脱敏
+mysql: `-- 字符串格式化: 姓名脱敏 (SUBSTRING, CONCAT, HANDLER)
 DELIMITER $$
 CREATE FUNCTION fn_mask_name(
     p_name VARCHAR(200)
@@ -1023,7 +1060,7 @@ BEGIN
 END$$
 DELIMITER ;
 
--- 日期处理: 计算工作日差
+-- 日期处理: 计算工作日差 (WHILE, IFNULL, DAYOFWEEK)
 DELIMITER $$
 CREATE FUNCTION fn_workday_diff(
     p_start_date DATETIME,
@@ -1044,7 +1081,7 @@ BEGIN
 END$$
 DELIMITER ;
 
--- 查询: 获取客户余额
+-- 查询: 获取客户余额 (SELECT INTO, LIMIT)
 DELIMITER $$
 CREATE FUNCTION fn_get_client_balance(
     p_client_no VARCHAR(32)
@@ -1058,9 +1095,46 @@ BEGIN
      LIMIT 1;
     RETURN v_balance;
 END$$
+DELIMITER ;
+
+-- 动态SQL: 统计表行数 (PREPARE/EXECUTE)
+DELIMITER $$
+CREATE FUNCTION fn_count_table(
+    p_table_name VARCHAR(128)
+) RETURNS INT
+READS SQL DATA
+BEGIN
+    DECLARE v_count INT DEFAULT 0;
+    SET @_dyn_sql = CONCAT('SELECT COUNT(*) INTO @_dyn_count FROM ', p_table_name);
+    PREPARE _dyn_stmt FROM @_dyn_sql;
+    EXECUTE _dyn_stmt;
+    DEALLOCATE PREPARE _dyn_stmt;
+    SET v_count = @_dyn_count;
+    RETURN v_count;
+END$$
+DELIMITER ;
+
+-- FOR循环等价: 计算阶乘 (WHILE loop, SIGNAL)
+DELIMITER $$
+CREATE FUNCTION fn_factorial(
+    p_n INT
+) RETURNS BIGINT
+DETERMINISTIC
+BEGIN
+    DECLARE v_result BIGINT DEFAULT 1;
+    DECLARE v_i INT DEFAULT 1;
+    IF p_n < 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Input must be non-negative';
+    END IF;
+    WHILE v_i <= p_n DO
+        SET v_result = v_result * v_i;
+        SET v_i = v_i + 1;
+    END WHILE;
+    RETURN v_result;
+END$$
 DELIMITER ;`,
 
-postgresql: `-- 字符串格式化: 姓名脱敏
+postgresql: `-- 字符串格式化: 姓名脱敏 (SUBSTR, ||, EXCEPTION)
 CREATE OR REPLACE FUNCTION fn_mask_name(
     p_name VARCHAR
 ) RETURNS VARCHAR
@@ -1081,7 +1155,7 @@ EXCEPTION
 END;
 $$;
 
--- 日期处理: 计算工作日差
+-- 日期处理: 计算工作日差 (WHILE LOOP, COALESCE, EXTRACT)
 CREATE OR REPLACE FUNCTION fn_workday_diff(
     p_start_date TIMESTAMP,
     p_end_date   TIMESTAMP
@@ -1107,7 +1181,7 @@ EXCEPTION
 END;
 $$;
 
--- 查询带OUT参数: 获取客户余额与状态
+-- 查询带OUT参数: 获取客户余额与状态 (SELECT INTO, NOT FOUND)
 CREATE OR REPLACE FUNCTION fn_get_client_balance(
     p_client_no  VARCHAR,
     OUT p_status VARCHAR
@@ -1133,12 +1207,49 @@ EXCEPTION
         RAISE NOTICE 'fn_get_client_balance error: %', SQLERRM;
         RETURN;
 END;
+$$;
+
+-- 动态SQL: 统计表行数 (EXECUTE)
+CREATE OR REPLACE FUNCTION fn_count_table(
+    p_table_name VARCHAR
+) RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count INTEGER;
+BEGIN
+    EXECUTE 'SELECT COUNT(*) FROM ' || p_table_name INTO v_count;
+    RETURN v_count;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'fn_count_table error: %', SQLERRM;
+        RETURN -1;
+END;
+$$;
+
+-- FOR循环: 计算阶乘 (numeric FOR loop, RAISE EXCEPTION)
+CREATE OR REPLACE FUNCTION fn_factorial(
+    p_n INTEGER
+) RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_result BIGINT := 1;
+BEGIN
+    IF p_n < 0 THEN
+        RAISE EXCEPTION 'Input must be non-negative' USING ERRCODE = 'P0001';
+    END IF;
+    FOR i IN 1..p_n LOOP
+        v_result := v_result * i;
+    END LOOP;
+    RETURN v_result;
+END;
 $$;`
 };
 
 /* ===== PROC SAMPLES ===== */
 const PROC_SAMPLES = {
-oracle: `-- CRUD操作: 新增或更新客户
+oracle: `-- CRUD操作: 新增或更新客户 (NVL, COMMIT, EXCEPTION)
 CREATE OR REPLACE PROCEDURE SP_UPSERT_CLIENT(
     P_CLIENT_NO   IN  VARCHAR2,
     P_CLIENT_NAME IN  VARCHAR2,
@@ -1175,7 +1286,7 @@ EXCEPTION
 END SP_UPSERT_CLIENT;
 /
 
--- 游标遍历: 冻结低余额客户
+-- 游标遍历: 冻结低余额客户 (CURSOR, LOOP, FETCH, %NOTFOUND)
 CREATE OR REPLACE PROCEDURE SP_FREEZE_LOW_BALANCE(
     P_THRESHOLD IN  NUMBER,
     P_COUNT     OUT NUMBER
@@ -1210,7 +1321,7 @@ EXCEPTION
 END SP_FREEZE_LOW_BALANCE;
 /
 
--- 事务处理: 转账
+-- 事务处理: 转账 (FOR UPDATE, SEQ, NO_DATA_FOUND)
 CREATE OR REPLACE PROCEDURE SP_TRANSFER(
     P_FROM_NO IN  VARCHAR2,
     P_TO_NO   IN  VARCHAR2,
@@ -1252,9 +1363,55 @@ EXCEPTION
         P_RESULT := 'ERROR: ' || SQLERRM;
         DBMS_OUTPUT.PUT_LINE('SP_TRANSFER error: ' || SQLERRM);
 END SP_TRANSFER;
+/
+
+-- 动态SQL与FOR循环: 批量归档 (EXECUTE IMMEDIATE, FOR..IN, MERGE)
+CREATE OR REPLACE PROCEDURE SP_ARCHIVE_OLD_TRADES(
+    P_DAYS_OLD   IN  NUMBER,
+    P_BATCH_SIZE IN  NUMBER DEFAULT 1000,
+    P_ARCHIVED   OUT NUMBER
+)
+IS
+    V_SQL VARCHAR2(1000);
+    V_CUTOFF DATE;
+BEGIN
+    P_ARCHIVED := 0;
+    V_CUTOFF := SYSDATE - P_DAYS_OLD;
+
+    -- 使用MERGE归档到历史表
+    MERGE INTO T_TRADE_HISTORY H
+    USING (
+        SELECT * FROM T_TRADE_RECORD
+         WHERE TRADE_DATE < V_CUTOFF
+           AND ROWNUM <= P_BATCH_SIZE
+    ) S
+    ON (H.TRADE_ID = S.TRADE_ID)
+    WHEN NOT MATCHED THEN
+        INSERT (TRADE_ID, CLIENT_NO, TRADE_DATE, TRADE_TYPE, AMOUNT, STATUS, CREATE_TIME)
+        VALUES (S.TRADE_ID, S.CLIENT_NO, S.TRADE_DATE, S.TRADE_TYPE, S.AMOUNT, 'ARCHIVED', SYSTIMESTAMP);
+
+    P_ARCHIVED := SQL%ROWCOUNT;
+
+    -- 使用动态SQL删除已归档记录
+    V_SQL := 'DELETE FROM T_TRADE_RECORD WHERE TRADE_DATE < :1 AND ROWNUM <= :2';
+    EXECUTE IMMEDIATE V_SQL USING V_CUTOFF, P_BATCH_SIZE;
+
+    -- 使用FOR循环更新统计
+    FOR REC IN (SELECT CLIENT_NO, COUNT(*) AS TRADE_CNT FROM T_TRADE_RECORD GROUP BY CLIENT_NO) LOOP
+        UPDATE T_CLIENT_INFO SET TRADE_COUNT = REC.TRADE_CNT WHERE CLIENT_NO = REC.CLIENT_NO;
+    END LOOP;
+
+    COMMIT;
+    DBMS_OUTPUT.PUT_LINE('Archived ' || P_ARCHIVED || ' trades older than ' || P_DAYS_OLD || ' days');
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK;
+        P_ARCHIVED := -1;
+        DBMS_OUTPUT.PUT_LINE('SP_ARCHIVE_OLD_TRADES error: ' || SQLERRM);
+END SP_ARCHIVE_OLD_TRADES;
 /`,
 
-mysql: `-- CRUD操作: 新增或更新客户
+mysql: `-- CRUD操作: 新增或更新客户 (IFNULL, HANDLER, CURSOR)
 DELIMITER $$
 CREATE PROCEDURE sp_upsert_client(
     IN  p_client_no   VARCHAR(32),
@@ -1293,7 +1450,7 @@ BEGIN
 END$$
 DELIMITER ;
 
--- 游标遍历: 冻结低余额客户
+-- 游标遍历: 冻结低余额客户 (CURSOR, HANDLER FOR NOT FOUND)
 DELIMITER $$
 CREATE PROCEDURE sp_freeze_low_balance(
     IN  p_threshold DECIMAL(18,2),
@@ -1329,7 +1486,7 @@ BEGIN
 END$$
 DELIMITER ;
 
--- 事务处理: 转账
+-- 事务处理: 转账 (FOR UPDATE, SIGNAL, HANDLER)
 DELIMITER $$
 CREATE PROCEDURE sp_transfer(
     IN  p_from_no VARCHAR(32),
@@ -1367,9 +1524,47 @@ BEGIN
         END IF;
     END IF;
 END$$
+DELIMITER ;
+
+-- 动态SQL与批量操作: 归档旧交易 (PREPARE/EXECUTE, INSERT...SELECT, WHILE)
+DELIMITER $$
+CREATE PROCEDURE sp_archive_old_trades(
+    IN  p_days_old   INT,
+    IN  p_batch_size INT,
+    OUT p_archived   INT
+)
+BEGIN
+    DECLARE v_cutoff DATE;
+    DECLARE v_affected INT DEFAULT 1;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        SET p_archived = -1;
+    END;
+
+    SET p_archived = 0;
+    SET v_cutoff = DATE_SUB(NOW(), INTERVAL p_days_old DAY);
+
+    -- 归档到历史表 (INSERT ... SELECT 等价MERGE)
+    INSERT IGNORE INTO t_trade_history (trade_id, client_no, trade_date, trade_type, amount, status, create_time)
+    SELECT trade_id, client_no, trade_date, trade_type, amount, 'ARCHIVED', CURRENT_TIMESTAMP(6)
+      FROM t_trade_record
+     WHERE trade_date < v_cutoff
+     LIMIT p_batch_size;
+    SET p_archived = ROW_COUNT();
+
+    -- 使用动态SQL删除已归档记录
+    SET @_dyn_sql = CONCAT('DELETE FROM t_trade_record WHERE trade_date < ''', v_cutoff, ''' LIMIT ', p_batch_size);
+    PREPARE _dyn_stmt FROM @_dyn_sql;
+    EXECUTE _dyn_stmt;
+    DEALLOCATE PREPARE _dyn_stmt;
+
+    COMMIT;
+    SELECT CONCAT('Archived ', p_archived, ' trades older than ', p_days_old, ' days') AS msg;
+END$$
 DELIMITER ;`,
 
-postgresql: `-- CRUD操作: 新增或更新客户
+postgresql: `-- CRUD操作: 新增或更新客户 (COALESCE, EXCEPTION, GET DIAGNOSTICS)
 CREATE OR REPLACE PROCEDURE sp_upsert_client(
     IN  p_client_no   VARCHAR,
     IN  p_client_name VARCHAR,
@@ -1406,7 +1601,7 @@ EXCEPTION
 END;
 $$;
 
--- 游标遍历: 冻结低余额客户
+-- 游标遍历: 冻结低余额客户 (CURSOR, FETCH, NOT FOUND)
 CREATE OR REPLACE PROCEDURE sp_freeze_low_balance(
     IN  p_threshold NUMERIC,
     OUT p_count     INTEGER
@@ -1440,7 +1635,7 @@ EXCEPTION
 END;
 $$;
 
--- 事务处理: 转账
+-- 事务处理: 转账 (FOR UPDATE, nextval, NOT FOUND)
 CREATE OR REPLACE PROCEDURE sp_transfer(
     IN  p_from_no VARCHAR,
     IN  p_to_no   VARCHAR,
@@ -1483,6 +1678,47 @@ EXCEPTION
     WHEN OTHERS THEN
         p_result := 'ERROR: ' || SQLERRM;
         RAISE NOTICE 'sp_transfer error: %', SQLERRM;
+END;
+$$;
+
+-- 动态SQL与FOR循环: 批量归档 (EXECUTE, FOR..IN query, INSERT ON CONFLICT)
+CREATE OR REPLACE PROCEDURE sp_archive_old_trades(
+    IN  p_days_old   INTEGER,
+    IN  p_batch_size INTEGER DEFAULT 1000,
+    OUT p_archived   INTEGER
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_cutoff DATE;
+    rec RECORD;
+BEGIN
+    p_archived := 0;
+    v_cutoff := NOW()::DATE - p_days_old;
+
+    -- 使用INSERT ON CONFLICT归档到历史表 (PG等价MERGE)
+    INSERT INTO t_trade_history (trade_id, client_no, trade_date, trade_type, amount, status, create_time)
+    SELECT trade_id, client_no, trade_date, trade_type, amount, 'ARCHIVED', CLOCK_TIMESTAMP()
+      FROM t_trade_record
+     WHERE trade_date < v_cutoff
+     LIMIT p_batch_size
+    ON CONFLICT (trade_id) DO NOTHING;
+
+    GET DIAGNOSTICS p_archived = ROW_COUNT;
+
+    -- 使用动态SQL删除已归档记录
+    EXECUTE 'DELETE FROM t_trade_record WHERE trade_date < $1' USING v_cutoff;
+
+    -- 使用FOR循环更新统计
+    FOR rec IN SELECT client_no, COUNT(*) AS trade_cnt FROM t_trade_record GROUP BY client_no LOOP
+        UPDATE t_client_info SET trade_count = rec.trade_cnt WHERE client_no = rec.client_no;
+    END LOOP;
+
+    RAISE NOTICE 'Archived % trades older than % days', p_archived, p_days_old;
+EXCEPTION
+    WHEN OTHERS THEN
+        p_archived := -1;
+        RAISE NOTICE 'sp_archive_old_trades error: %', SQLERRM;
 END;
 $$;`
 }
@@ -2778,9 +3014,15 @@ function transformBody(body, fromDb, toDb) {
 
   // SUBSTR / SUBSTRING
   if (fromDb === 'postgresql' && (toDb === 'oracle' || toDb === 'mysql')) {
-    b = b.replace(/\bSUBSTRING\s*\(\s*([^,]+?)\s+FROM\s+(\S+)\s+FOR\s+(\S+)\s*\)/gi, 'SUBSTR($1, $2, $3)');
+    b = b.replace(/\bSUBSTRING\s*\(\s*((?:[^,()]+|\([^)]*\))+?)\s+FROM\s+(\S+)\s+FOR\s+(\S+)\s*\)/gi, 'SUBSTR($1, $2, $3)');
   } else if ((fromDb === 'oracle' || fromDb === 'mysql') && toDb === 'postgresql') {
-    b = b.replace(/\bSUBSTR\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, 'SUBSTRING($1 FROM $2 FOR $3)');
+    b = b.replace(/\bSUBSTR\s*\(\s*((?:[^,()]+|\([^)]*\))+),\s*((?:[^,()]+|\([^)]*\))+),\s*((?:[^,()]+|\([^)]*\))*[^)]*)\)/gi, 'SUBSTRING($1 FROM $2 FOR $3)');
+  }
+  // Oracle SUBSTR → MySQL SUBSTRING (comma-style)
+  if (fromDb === 'oracle' && toDb === 'mysql') {
+    b = b.replace(/\bSUBSTR\s*\(/gi, 'SUBSTRING(');
+  } else if (fromDb === 'mysql' && toDb === 'oracle') {
+    b = b.replace(/\bSUBSTRING\s*\(/gi, 'SUBSTR(');
   }
 
   // String concatenation: || vs CONCAT
@@ -3156,6 +3398,52 @@ function transformBody(body, fromDb, toDb) {
   // CURRENT_TIMESTAMP -> Oracle SYSTIMESTAMP
   if (fromDb === 'mysql' && toDb === 'oracle') {
     b = b.replace(/\bCURRENT_TIMESTAMP\b/gi, 'SYSTIMESTAMP');
+  }
+
+  // EXECUTE IMMEDIATE / dynamic SQL
+  if (fromDb === 'oracle' && toDb === 'postgresql') {
+    b = b.replace(/\bEXECUTE\s+IMMEDIATE\b/gi, 'EXECUTE');
+  } else if (fromDb === 'oracle' && toDb === 'mysql') {
+    b = b.replace(/\bEXECUTE\s+IMMEDIATE\s+([^;]+);/gi, function(m, expr) {
+      var v = expr.trim();
+      return 'SET @_dyn_sql = ' + v + ';\n  PREPARE _dyn_stmt FROM @_dyn_sql;\n  EXECUTE _dyn_stmt;\n  DEALLOCATE PREPARE _dyn_stmt;';
+    });
+  } else if (fromDb === 'postgresql' && toDb === 'oracle') {
+    b = b.replace(/\bEXECUTE\s+(?!IMMEDIATE\b)([^;]+);/gi, function(m, expr) {
+      if (/^\s*(stmt|_dyn_stmt)\b/i.test(expr)) return m;
+      return 'EXECUTE IMMEDIATE ' + expr.trim() + ';';
+    });
+  } else if (fromDb === 'postgresql' && toDb === 'mysql') {
+    b = b.replace(/\bEXECUTE\s+(?!IMMEDIATE\b)([^;]+);/gi, function(m, expr) {
+      var v = expr.trim();
+      if (/^\s*(stmt|_dyn_stmt)\b/i.test(v)) return m;
+      return 'SET @_dyn_sql = ' + v + ';\n  PREPARE _dyn_stmt FROM @_dyn_sql;\n  EXECUTE _dyn_stmt;\n  DEALLOCATE PREPARE _dyn_stmt;';
+    });
+  } else if (fromDb === 'mysql') {
+    // MySQL PREPARE/EXECUTE/DEALLOCATE -> Oracle EXECUTE IMMEDIATE or PG EXECUTE
+    b = b.replace(/SET\s+@(\w+)\s*=\s*([^;]+);\s*\n\s*PREPARE\s+(\w+)\s+FROM\s+@\1;\s*\n\s*EXECUTE\s+\3;\s*\n\s*DEALLOCATE\s+PREPARE\s+\3;/gi, function(m, varName, expr) {
+      if (toDb === 'oracle') return 'EXECUTE IMMEDIATE ' + expr.trim() + ';';
+      return 'EXECUTE ' + expr.trim() + ';';
+    });
+  }
+
+  // SQLCODE / SQLERRM conversions
+  if (fromDb === 'oracle' && toDb === 'postgresql') {
+    b = b.replace(/\bSQLCODE\b/g, 'SQLSTATE');
+  } else if (fromDb === 'oracle' && toDb === 'mysql') {
+    b = b.replace(/\bSQLERRM\b/g, '@_err_msg');
+    b = b.replace(/\bSQLCODE\b/g, '@_err_code');
+  } else if (fromDb === 'postgresql' && toDb === 'oracle') {
+    b = b.replace(/\bSQLSTATE\b(?!\s*')/g, 'SQLCODE');
+  } else if (fromDb === 'postgresql' && toDb === 'mysql') {
+    b = b.replace(/\bSQLERRM\b/g, '@_err_msg');
+    b = b.replace(/\bSQLSTATE\b(?!\s*')/g, '@_err_state');
+  } else if (fromDb === 'mysql' && toDb === 'oracle') {
+    b = b.replace(/\b@_err_msg\b/g, 'SQLERRM');
+    b = b.replace(/\b@_err_code\b/g, 'SQLCODE');
+  } else if (fromDb === 'mysql' && toDb === 'postgresql') {
+    b = b.replace(/\b@_err_msg\b/g, 'SQLERRM');
+    b = b.replace(/\b@_err_code\b/g, 'SQLSTATE');
   }
 
   return b;
