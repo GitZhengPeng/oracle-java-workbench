@@ -141,11 +141,9 @@ textarea::placeholder{color:var(--text-muted)}
 .scroll-top:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
 
 /* ===== LIVE2D MIKU MASCOT (Right Side) ===== */
-#miku-live2d-wrap{position:fixed;top:50%;right:0;z-index:100;transform:translateY(-50%);cursor:pointer}
-#miku-tip{position:absolute;top:-10px;right:70px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:8px 14px;font-size:12px;color:var(--text);box-shadow:var(--shadow-md);opacity:0;transition:opacity .3s;pointer-events:none;max-width:180px;line-height:1.5;z-index:101}
-#miku-tip::after{content:'';position:absolute;right:-6px;top:50%;transform:translateY(-50%) rotate(45deg);width:10px;height:10px;background:var(--bg);border-right:1px solid var(--border);border-top:1px solid var(--border)}
-#miku-name-tag{position:absolute;bottom:4px;left:50%;transform:translateX(-50%);background:rgba(57,197,187,.85);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;pointer-events:none;letter-spacing:.5px;white-space:nowrap}
-#miku-live2d-wrap #live2dcanvas{position:relative !important;left:auto !important;right:auto !important;bottom:auto !important;top:auto !important}
+#miku-live2d-wrap{position:fixed;top:50%;right:-10px;z-index:100;transform:translateY(-50%);cursor:pointer}
+#miku-canvas{display:block;width:200px;height:280px}
+#miku-name-tag{position:absolute;top:-24px;left:50%;transform:translateX(-50%);background:rgba(57,197,187,.9);color:#fff;font-size:11px;font-weight:700;padding:3px 12px;border-radius:12px;pointer-events:none;letter-spacing:.5px;white-space:nowrap;box-shadow:0 2px 8px rgba(57,197,187,.3)}
 
 /* ===== MISC ===== */
 .kbd{display:inline-block;padding:1px 5px;border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:var(--font-code);color:var(--text-muted);background:var(--bg-secondary);margin-left:6px;vertical-align:middle}
@@ -5161,68 +5159,43 @@ app.mount('#app');
 </script>
 <!-- Live2D Miku Mascot Widget -->
 <div id="miku-live2d-wrap">
-  <div id="miku-tip"></div>
   <div id="miku-name-tag">初音未来</div>
+  <canvas id="miku-canvas" width="400" height="560"></canvas>
 </div>
-<script src="https://unpkg.com/live2d-widget@3.1.4/lib/L2Dwidget.min.js"></script>
+<script src="live2d.min.js"></script>
 <script>
 (function() {
   var models = [
-    { url: 'https://unpkg.com/live2d-widget-model-miku@1.0.5/assets/miku.model.json', name: '初音未来', tip: '大家好！我是初音未来~' },
-    { url: 'https://unpkg.com/live2d-widget-model-shizuku@1.0.5/assets/shizuku.model.json', name: '雫 Shizuku', tip: '换上雫的造型啦~' },
-    { url: 'https://unpkg.com/live2d-widget-model-koharu@1.0.5/assets/koharu.model.json', name: '小春 Koharu', tip: '小春来报到！元气满满~' },
-    { url: 'https://unpkg.com/live2d-widget-model-haruto@1.0.5/assets/haruto.model.json', name: '春人 Haruto', tip: '帅气的春人登场！' },
-    { url: 'https://unpkg.com/live2d-widget-model-hibiki@1.0.5/assets/hibiki.model.json', name: '響 Hibiki', tip: '響来啦~一起玩吧！' },
-    { url: 'https://unpkg.com/live2d-widget-model-tororo@1.0.5/assets/tororo.model.json', name: '虎虎 Tororo', tip: '喵~虎虎最可爱！' },
-    { url: 'https://unpkg.com/live2d-widget-model-hijiki@1.0.5/assets/hijiki.model.json', name: '鹿尾菜 Hijiki', tip: '嘿嘿~我是鹿尾菜~' },
-    { url: 'https://unpkg.com/live2d-widget-model-tsumiki@1.0.5/assets/tsumiki.model.json', name: '積 Tsumiki', tip: '積来陪你啦~' }
+    { url: 'https://unpkg.com/live2d-widget-model-miku@1.0.5/assets/miku.model.json', name: '初音未来' },
+    { url: 'https://unpkg.com/live2d-widget-model-shizuku@1.0.5/assets/shizuku.model.json', name: '雫 Shizuku' },
+    { url: 'https://unpkg.com/live2d-widget-model-koharu@1.0.5/assets/koharu.model.json', name: '小春 Koharu' },
+    { url: 'https://unpkg.com/live2d-widget-model-haruto@1.0.5/assets/haruto.model.json', name: '春人 Haruto' },
+    { url: 'https://unpkg.com/live2d-widget-model-hibiki@1.0.5/assets/hibiki.model.json', name: '響 Hibiki' },
+    { url: 'https://unpkg.com/live2d-widget-model-tororo@1.0.5/assets/tororo.model.json', name: '虎虎 Tororo' },
+    { url: 'https://unpkg.com/live2d-widget-model-hijiki@1.0.5/assets/hijiki.model.json', name: '鹿尾菜 Hijiki' },
+    { url: 'https://unpkg.com/live2d-widget-model-tsumiki@1.0.5/assets/tsumiki.model.json', name: '積 Tsumiki' }
   ];
   var currentModel = parseInt(localStorage.getItem('miku_model_idx')) || 0;
   if (currentModel >= models.length) currentModel = 0;
-  var tip = document.getElementById('miku-tip');
   var nameTag = document.getElementById('miku-name-tag');
-  var tipTimer = null;
+  var switching = false;
 
-  function showTip(text, dur) {
-    tip.textContent = text;
-    tip.style.opacity = '1';
-    clearTimeout(tipTimer);
-    tipTimer = setTimeout(function() { tip.style.opacity = '0'; }, dur || 3000);
-  }
-
-  function loadModel(idx) {
+  function switchTo(idx) {
+    if (switching) return;
+    switching = true;
     currentModel = idx % models.length;
     localStorage.setItem('miku_model_idx', currentModel);
     nameTag.textContent = models[currentModel].name;
-    // Remove previous Live2D canvas if exists
-    var prev = document.getElementById('live2dcanvas');
-    if (prev) prev.parentNode.removeChild(prev);
-    L2Dwidget.init({
-      model: { jsonPath: models[currentModel].url },
-      display: { position: 'right', width: 200, height: 280, hOffset: 0, vOffset: 0 },
-      mobile: { show: false },
-      react: { opacityDefault: 0.9, opacityOnHover: 1.0 },
-      dialog: { enable: false }
-    });
-    // Move the generated canvas wrapper into our container for right-center positioning
-    setTimeout(function() {
-      var cDiv = document.getElementById('live2dcanvas');
-      if (cDiv) {
-        var wrap = document.getElementById('miku-live2d-wrap');
-        wrap.appendChild(cDiv);
-      }
-    }, 800);
-    showTip(models[currentModel].tip, 3500);
+    try { loadlive2d('miku-canvas', models[currentModel].url); } catch(e) {}
+    setTimeout(function() { switching = false; }, 1500);
   }
 
   // Initial load
-  nameTag.textContent = models[currentModel].name;
-  loadModel(currentModel);
-  setTimeout(function() { showTip('嗨！点击我可以换造型哦~', 4000); }, 3000);
+  switchTo(currentModel);
 
-  // Click to switch model
-  document.getElementById('miku-live2d-wrap').addEventListener('click', function(e) {
-    loadModel(currentModel + 1);
+  // Click to cycle
+  document.getElementById('miku-live2d-wrap').addEventListener('click', function() {
+    switchTo(currentModel + 1);
   });
 
   // Hide on mobile
