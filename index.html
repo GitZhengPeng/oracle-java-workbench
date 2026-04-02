@@ -786,50 +786,26 @@ $$;</pre>
           </div>
           <div class="rules-filter-tabs">
             <button class="rules-filter-tab" :class="{active: ruleFilterDir==='all'}" @click="ruleFilterDir='all'">&#20840;&#37096;</button>
-            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='oraclePg'}" @click="ruleFilterDir='oraclePg'">Oracle-PG</button>
-            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='oracleMysql'}" @click="ruleFilterDir='oracleMysql'">Oracle-MySQL</button>
-            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='mysqlPg'}" @click="ruleFilterDir='mysqlPg'">MySQL-PG</button>
+            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='oracleToMysql'||ruleFilterDir==='mysqlToOracle'}" @click="ruleFilterDir='oracleToMysql'">Oracle&#8596;MySQL</button>
+            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='oracleToPg'||ruleFilterDir==='pgToOracle'}" @click="ruleFilterDir='oracleToPg'">Oracle&#8596;PG</button>
+            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='mysqlToPg'||ruleFilterDir==='pgToMysql'}" @click="ruleFilterDir='mysqlToPg'">MySQL&#8596;PG</button>
           </div>
           <div class="rules-grid">
-            <div class="rules-card" v-if="filteredDdlRules.oraclePg">
+            <template v-for="cat in ddlRuleCats" :key="cat.key">
+            <div class="rules-card" v-if="filteredDdlRules[cat.key]">
               <div class="rules-card-head">
-                <h3>Oracle &#8596; PostgreSQL <span class="ref-badge" style="margin-left:8px">{{filteredDdlRules.oraclePg.length}}</span></h3>
-                <button class="btn-add" @click="openRuleModal('ddl','oraclePg',-1)">&#26032;&#22686;</button>
+                <h3>{{cat.label}} <span class="ref-badge" style="margin-left:8px">{{filteredDdlRules[cat.key].length}}</span></h3>
+                <button class="btn-add" @click="openRuleModal('ddl',cat.key,-1)">&#26032;&#22686;</button>
               </div>
               <div class="rules-card-body">
-                <div class="rule-row" v-for="(rule, idx) in filteredDdlRules.oraclePg" :key="'op'+idx" @click="openRuleModal('ddl','oraclePg',ddlRules.oraclePg.indexOf(rule))">
+                <div class="rule-row" v-for="(rule, idx) in filteredDdlRules[cat.key]" :key="cat.key+idx" @click="openRuleModal('ddl',cat.key,ddlRules[cat.key].indexOf(rule))">
                   <span class="rule-source">{{rule.source}}</span>
-                  <span class="rule-arrow">&#8644;</span>
+                  <span class="rule-arrow">&#8594;</span>
                   <span class="rule-target">{{rule.target}}</span>
                 </div>
               </div>
             </div>
-            <div class="rules-card" v-if="filteredDdlRules.oracleMysql">
-              <div class="rules-card-head">
-                <h3>Oracle &#8596; MySQL <span class="ref-badge" style="margin-left:8px">{{filteredDdlRules.oracleMysql.length}}</span></h3>
-                <button class="btn-add" @click="openRuleModal('ddl','oracleMysql',-1)">&#26032;&#22686;</button>
-              </div>
-              <div class="rules-card-body">
-                <div class="rule-row" v-for="(rule, idx) in filteredDdlRules.oracleMysql" :key="'om'+idx" @click="openRuleModal('ddl','oracleMysql',ddlRules.oracleMysql.indexOf(rule))">
-                  <span class="rule-source">{{rule.source}}</span>
-                  <span class="rule-arrow">&#8644;</span>
-                  <span class="rule-target">{{rule.target}}</span>
-                </div>
-              </div>
-            </div>
-            <div class="rules-card" v-if="filteredDdlRules.mysqlPg">
-              <div class="rules-card-head">
-                <h3>MySQL &#8596; PostgreSQL <span class="ref-badge" style="margin-left:8px">{{filteredDdlRules.mysqlPg.length}}</span></h3>
-                <button class="btn-add" @click="openRuleModal('ddl','mysqlPg',-1)">&#26032;&#22686;</button>
-              </div>
-              <div class="rules-card-body">
-                <div class="rule-row" v-for="(rule, idx) in filteredDdlRules.mysqlPg" :key="'mp'+idx" @click="openRuleModal('ddl','mysqlPg',ddlRules.mysqlPg.indexOf(rule))">
-                  <span class="rule-source">{{rule.source}}</span>
-                  <span class="rule-arrow">&#8644;</span>
-                  <span class="rule-target">{{rule.target}}</span>
-                </div>
-              </div>
-            </div>
+            </template>
           </div>
         </section>
       </template>
@@ -845,9 +821,9 @@ $$;</pre>
           </div>
           <div class="rules-filter-tabs">
             <button class="rules-filter-tab" :class="{active: ruleFilterDir==='all'}" @click="ruleFilterDir='all'">&#20840;&#37096;</button>
-            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='oraclePg'}" @click="ruleFilterDir='oraclePg'">Oracle-PG</button>
-            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='oracleMysql'}" @click="ruleFilterDir='oracleMysql'">Oracle-MySQL</button>
-            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='mysqlPg'}" @click="ruleFilterDir='mysqlPg'">MySQL-PG</button>
+            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='oracleToMysql'||ruleFilterDir==='mysqlToOracle'}" @click="ruleFilterDir='oracleToMysql'">Oracle&#8596;MySQL</button>
+            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='oracleToPg'||ruleFilterDir==='pgToOracle'}" @click="ruleFilterDir='oracleToPg'">Oracle&#8596;PG</button>
+            <button class="rules-filter-tab" :class="{active: ruleFilterDir==='mysqlToPg'||ruleFilterDir==='pgToMysql'}" @click="ruleFilterDir='mysqlToPg'">MySQL&#8596;PG</button>
           </div>
           <div class="rules-grid">
             <div class="rules-card" v-if="filteredBodyRules.oraclePg">
@@ -2380,165 +2356,298 @@ function parsePGColumn(def) {
   return col;
 }
 
-/* ===== TYPE MAPPERS ===== */
-function oracleTypeToMySQL(col) {
-  const t = col.type.toUpperCase();
-  if (t === 'NUMBER' || t === 'NUMERIC' || t === 'DECIMAL') {
-    if (col.precision && col.scale) return 'DECIMAL(' + col.precision + ',' + col.scale + ')';
-    if (col.precision && col.precision <= 3 && col.scale == null) return 'TINYINT';
-    if (col.precision && col.precision <= 5 && col.scale == null) return 'SMALLINT';
-    if (col.precision && col.precision <= 9 && col.scale == null) return 'INT';
-    if (col.precision && col.precision <= 18 && col.scale == null) return 'BIGINT';
-    if (col.precision && col.scale == null) return 'DECIMAL(' + col.precision + ',0)';
-    return 'DECIMAL(38,10)';
+/* ===== DDL TYPE MAPPING RULES (data-driven) ===== */
+var _ddlRulesData = {
+  oracleToMysql: [
+    {source:'NUMBER(p,s)',target:'DECIMAL(p,s)'},
+    {source:'NUMBER(p) [p<=3]',target:'TINYINT'},
+    {source:'NUMBER(p) [p<=5]',target:'SMALLINT'},
+    {source:'NUMBER(p) [p<=9]',target:'INT'},
+    {source:'NUMBER(p) [p<=18]',target:'BIGINT'},
+    {source:'NUMBER(p)',target:'DECIMAL(p,0)'},
+    {source:'NUMBER',target:'DECIMAL(38,10)'},
+    {source:'NUMERIC(p,s)',target:'DECIMAL(p,s)'},
+    {source:'DECIMAL(p,s)',target:'DECIMAL(p,s)'},
+    {source:'INTEGER',target:'INT'},
+    {source:'INT',target:'INT'},
+    {source:'PLS_INTEGER',target:'INT'},
+    {source:'BINARY_INTEGER',target:'INT'},
+    {source:'SMALLINT',target:'SMALLINT'},
+    {source:'FLOAT',target:'DOUBLE'},
+    {source:'BINARY_FLOAT',target:'FLOAT'},
+    {source:'BINARY_DOUBLE',target:'DOUBLE'},
+    {source:'VARCHAR2(n)',target:'VARCHAR(n)'},
+    {source:'NVARCHAR2(n)',target:'VARCHAR(n)'},
+    {source:'CHAR(n)',target:'CHAR(n)'},
+    {source:'NCHAR(n)',target:'CHAR(n)'},
+    {source:'CLOB',target:'LONGTEXT'},
+    {source:'NCLOB',target:'LONGTEXT'},
+    {source:'LONG',target:'LONGTEXT'},
+    {source:'BLOB',target:'LONGBLOB'},
+    {source:'RAW(n)',target:'VARBINARY(n)'},
+    {source:'LONG RAW',target:'LONGBLOB'},
+    {source:'DATE',target:'DATETIME'},
+    {source:'TIMESTAMP',target:'TIMESTAMP(6)'},
+    {source:'BOOLEAN',target:'TINYINT(1)'},
+    {source:'XMLTYPE',target:'LONGTEXT'}
+  ],
+  oracleToPg: [
+    {source:'NUMBER(p,s)',target:'NUMERIC(p,s)'},
+    {source:'NUMBER(p) [p<=5]',target:'SMALLINT'},
+    {source:'NUMBER(p) [p<=9]',target:'INTEGER'},
+    {source:'NUMBER(p) [p<=18]',target:'BIGINT'},
+    {source:'NUMBER(p)',target:'NUMERIC(p,0)'},
+    {source:'NUMBER',target:'NUMERIC'},
+    {source:'NUMERIC(p,s)',target:'NUMERIC(p,s)'},
+    {source:'DECIMAL(p,s)',target:'NUMERIC(p,s)'},
+    {source:'INTEGER',target:'INTEGER'},
+    {source:'INT',target:'INTEGER'},
+    {source:'PLS_INTEGER',target:'INTEGER'},
+    {source:'BINARY_INTEGER',target:'INTEGER'},
+    {source:'SMALLINT',target:'SMALLINT'},
+    {source:'FLOAT',target:'REAL'},
+    {source:'BINARY_FLOAT',target:'REAL'},
+    {source:'BINARY_DOUBLE',target:'DOUBLE PRECISION'},
+    {source:'VARCHAR2(n)',target:'VARCHAR(n)'},
+    {source:'NVARCHAR2(n)',target:'VARCHAR(n)'},
+    {source:'CHAR(n)',target:'CHAR(n)'},
+    {source:'NCHAR(n)',target:'CHAR(n)'},
+    {source:'CLOB',target:'TEXT'},
+    {source:'NCLOB',target:'TEXT'},
+    {source:'LONG',target:'TEXT'},
+    {source:'BLOB',target:'BYTEA'},
+    {source:'RAW',target:'BYTEA'},
+    {source:'LONG RAW',target:'BYTEA'},
+    {source:'DATE',target:'TIMESTAMP'},
+    {source:'TIMESTAMP',target:'TIMESTAMP'},
+    {source:'BOOLEAN',target:'BOOLEAN'},
+    {source:'XMLTYPE',target:'XML'}
+  ],
+  mysqlToOracle: [
+    {source:'TINYINT(1)',target:'NUMBER(1)'},
+    {source:'TINYINT',target:'NUMBER(3)'},
+    {source:'SMALLINT',target:'NUMBER(5)'},
+    {source:'MEDIUMINT',target:'NUMBER(7)'},
+    {source:'INT',target:'NUMBER(10)'},
+    {source:'INTEGER',target:'NUMBER(10)'},
+    {source:'BIGINT',target:'NUMBER(18)'},
+    {source:'DECIMAL(p,s)',target:'NUMBER(p,s)'},
+    {source:'NUMERIC(p,s)',target:'NUMBER(p,s)'},
+    {source:'DECIMAL(p)',target:'NUMBER(p)'},
+    {source:'NUMERIC(p)',target:'NUMBER(p)'},
+    {source:'DECIMAL',target:'NUMBER'},
+    {source:'NUMERIC',target:'NUMBER'},
+    {source:'FLOAT',target:'BINARY_FLOAT'},
+    {source:'DOUBLE',target:'BINARY_DOUBLE'},
+    {source:'VARCHAR(n)',target:'VARCHAR2(n)'},
+    {source:'NVARCHAR(n)',target:'NVARCHAR2(n)'},
+    {source:'CHAR(n)',target:'CHAR(n)'},
+    {source:'TEXT',target:'CLOB'},
+    {source:'MEDIUMTEXT',target:'CLOB'},
+    {source:'LONGTEXT',target:'CLOB'},
+    {source:'TINYTEXT',target:'CLOB'},
+    {source:'BLOB',target:'BLOB'},
+    {source:'MEDIUMBLOB',target:'BLOB'},
+    {source:'LONGBLOB',target:'BLOB'},
+    {source:'TINYBLOB',target:'BLOB'},
+    {source:'VARBINARY(n)',target:'RAW(n)'},
+    {source:'BINARY(n)',target:'RAW(n)'},
+    {source:'DATETIME(n)',target:'TIMESTAMP(n)'},
+    {source:'DATETIME',target:'DATE'},
+    {source:'TIMESTAMP',target:'TIMESTAMP'},
+    {source:'DATE',target:'DATE'},
+    {source:'TIME',target:'VARCHAR2(20)'},
+    {source:'YEAR',target:'NUMBER(4)'},
+    {source:'BIT',target:'NUMBER(1)'},
+    {source:'ENUM',target:'VARCHAR2(100)'},
+    {source:'SET',target:'VARCHAR2(100)'},
+    {source:'JSON',target:'CLOB'},
+    {source:'BOOLEAN',target:'NUMBER(1)'}
+  ],
+  mysqlToPg: [
+    {source:'TINYINT(1)',target:'BOOLEAN'},
+    {source:'TINYINT',target:'SMALLINT'},
+    {source:'SMALLINT',target:'SMALLINT'},
+    {source:'MEDIUMINT',target:'INTEGER'},
+    {source:'INT',target:'INTEGER'},
+    {source:'INTEGER',target:'INTEGER'},
+    {source:'BIGINT',target:'BIGINT'},
+    {source:'DECIMAL(p,s)',target:'NUMERIC(p,s)'},
+    {source:'NUMERIC(p,s)',target:'NUMERIC(p,s)'},
+    {source:'DECIMAL(p)',target:'NUMERIC(p)'},
+    {source:'NUMERIC(p)',target:'NUMERIC(p)'},
+    {source:'DECIMAL',target:'NUMERIC'},
+    {source:'NUMERIC',target:'NUMERIC'},
+    {source:'FLOAT',target:'REAL'},
+    {source:'DOUBLE',target:'DOUBLE PRECISION'},
+    {source:'VARCHAR(n)',target:'VARCHAR(n)'},
+    {source:'NVARCHAR(n)',target:'VARCHAR(n)'},
+    {source:'CHAR(n)',target:'CHAR(n)'},
+    {source:'TEXT',target:'TEXT'},
+    {source:'MEDIUMTEXT',target:'TEXT'},
+    {source:'LONGTEXT',target:'TEXT'},
+    {source:'TINYTEXT',target:'TEXT'},
+    {source:'BLOB',target:'BYTEA'},
+    {source:'MEDIUMBLOB',target:'BYTEA'},
+    {source:'LONGBLOB',target:'BYTEA'},
+    {source:'TINYBLOB',target:'BYTEA'},
+    {source:'VARBINARY',target:'BYTEA'},
+    {source:'BINARY',target:'BYTEA'},
+    {source:'DATETIME',target:'TIMESTAMP'},
+    {source:'TIMESTAMP',target:'TIMESTAMP'},
+    {source:'DATE',target:'DATE'},
+    {source:'TIME',target:'TIME'},
+    {source:'YEAR',target:'INTEGER'},
+    {source:'BIT',target:'BOOLEAN'},
+    {source:'ENUM',target:'VARCHAR(100)'},
+    {source:'SET',target:'VARCHAR(100)'},
+    {source:'JSON',target:'JSONB'},
+    {source:'BOOLEAN',target:'BOOLEAN'}
+  ],
+  pgToOracle: [
+    {source:'BIGSERIAL',target:'NUMBER(18)'},
+    {source:'SERIAL',target:'NUMBER(10)'},
+    {source:'SMALLSERIAL',target:'NUMBER(5)'},
+    {source:'SMALLINT',target:'NUMBER(5)'},
+    {source:'INTEGER',target:'NUMBER(10)'},
+    {source:'INT',target:'NUMBER(10)'},
+    {source:'BIGINT',target:'NUMBER(18)'},
+    {source:'NUMERIC(p,s)',target:'NUMBER(p,s)'},
+    {source:'DECIMAL(p,s)',target:'NUMBER(p,s)'},
+    {source:'NUMERIC(p)',target:'NUMBER(p)'},
+    {source:'DECIMAL(p)',target:'NUMBER(p)'},
+    {source:'NUMERIC',target:'NUMBER'},
+    {source:'DECIMAL',target:'NUMBER'},
+    {source:'REAL',target:'BINARY_FLOAT'},
+    {source:'DOUBLE PRECISION',target:'BINARY_DOUBLE'},
+    {source:'VARCHAR(n)',target:'VARCHAR2(n)'},
+    {source:'CHARACTER VARYING(n)',target:'VARCHAR2(n)'},
+    {source:'CHAR(n)',target:'CHAR(n)'},
+    {source:'CHARACTER(n)',target:'CHAR(n)'},
+    {source:'TEXT',target:'CLOB'},
+    {source:'BYTEA',target:'BLOB'},
+    {source:'BOOLEAN',target:'NUMBER(1)'},
+    {source:'TIMESTAMP WITHOUT TIME ZONE',target:'TIMESTAMP'},
+    {source:'TIMESTAMP WITH TIME ZONE',target:'TIMESTAMP'},
+    {source:'TIMESTAMP',target:'TIMESTAMP'},
+    {source:'DATE',target:'DATE'},
+    {source:'TIME WITHOUT TIME ZONE',target:'VARCHAR2(20)'},
+    {source:'TIME',target:'VARCHAR2(20)'},
+    {source:'JSON',target:'CLOB'},
+    {source:'JSONB',target:'CLOB'},
+    {source:'XML',target:'XMLTYPE'},
+    {source:'UUID',target:'RAW(16)'}
+  ],
+  pgToMysql: [
+    {source:'BIGSERIAL',target:'BIGINT'},
+    {source:'SERIAL',target:'INT'},
+    {source:'SMALLSERIAL',target:'SMALLINT'},
+    {source:'SMALLINT',target:'SMALLINT'},
+    {source:'INTEGER',target:'INT'},
+    {source:'INT',target:'INT'},
+    {source:'BIGINT',target:'BIGINT'},
+    {source:'NUMERIC(p,s)',target:'DECIMAL(p,s)'},
+    {source:'DECIMAL(p,s)',target:'DECIMAL(p,s)'},
+    {source:'NUMERIC(p)',target:'DECIMAL(p)'},
+    {source:'DECIMAL(p)',target:'DECIMAL(p)'},
+    {source:'NUMERIC',target:'DECIMAL(38,10)'},
+    {source:'DECIMAL',target:'DECIMAL(38,10)'},
+    {source:'REAL',target:'FLOAT'},
+    {source:'DOUBLE PRECISION',target:'DOUBLE'},
+    {source:'VARCHAR(n)',target:'VARCHAR(n)'},
+    {source:'CHARACTER VARYING(n)',target:'VARCHAR(n)'},
+    {source:'CHAR(n)',target:'CHAR(n)'},
+    {source:'CHARACTER(n)',target:'CHAR(n)'},
+    {source:'TEXT',target:'LONGTEXT'},
+    {source:'BYTEA',target:'LONGBLOB'},
+    {source:'BOOLEAN',target:'TINYINT(1)'},
+    {source:'TIMESTAMP',target:'TIMESTAMP(6)'},
+    {source:'DATE',target:'DATE'},
+    {source:'TIME',target:'TIME'},
+    {source:'JSON',target:'JSON'},
+    {source:'JSONB',target:'JSON'},
+    {source:'XML',target:'LONGTEXT'},
+    {source:'UUID',target:'CHAR(36)'}
+  ]
+};
+
+/* ===== RULE-DRIVEN TYPE MATCHING ENGINE ===== */
+function _parseDdlSource(src) {
+  var s = src.trim();
+  var cond = null;
+  var cm = s.match(/\s*\[p([<>]=?)(\d+)\]\s*$/);
+  if (cm) { cond = {op:cm[1], val:parseInt(cm[2])}; s = s.replace(/\s*\[.*\]$/, '').trim(); }
+  var hasN=false, hasP=false, hasPS=false, specificVal=null;
+  var pm = s.match(/^(.+?)\(([^)]*)\)$/);
+  if (pm) {
+    var params = pm[2].trim();
+    s = pm[1].trim();
+    if (params === 'n') hasN = true;
+    else if (params === 'p,s') hasPS = true;
+    else if (params === 'p') hasP = true;
+    else if (params === 'p,0') { hasP = true; /* special: precision with fixed 0 scale */ }
+    else if (/^\d+$/.test(params)) specificVal = parseInt(params);
   }
-  if (t === 'INTEGER' || t === 'INT' || t === 'PLS_INTEGER' || t === 'BINARY_INTEGER') return 'INT';
-  if (t === 'SMALLINT') return 'SMALLINT';
-  if (t === 'FLOAT') return 'DOUBLE';
-  if (t === 'BINARY_FLOAT') return 'FLOAT';
-  if (t === 'BINARY_DOUBLE') return 'DOUBLE';
-  if (t === 'VARCHAR2' || t === 'NVARCHAR2') return 'VARCHAR(' + (col.length || 255) + ')';
-  if (t === 'CHAR' || t === 'NCHAR') return 'CHAR(' + (col.length || 1) + ')';
-  if (t === 'CLOB' || t === 'NCLOB' || t === 'LONG') return 'LONGTEXT';
-  if (t === 'BLOB') return 'LONGBLOB';
-  if (t === 'RAW') return 'VARBINARY(' + (col.length || 2000) + ')';
-  if (t === 'LONG RAW') return 'LONGBLOB';
-  if (t === 'DATE') return 'DATETIME';
-  if (t === 'TIMESTAMP' || t.startsWith('TIMESTAMP')) return 'TIMESTAMP(6)';
-  if (t === 'BOOLEAN') return 'TINYINT(1)';
-  if (t === 'XMLTYPE') return 'LONGTEXT';
-  return col.rawType || t;
+  var types = s.split(/\s*\/\s*/).map(function(t){return t.trim().toUpperCase();});
+  return {types:types, hasN:hasN, hasP:hasP, hasPS:hasPS, specificVal:specificVal, cond:cond};
 }
 
-function oracleTypeToPG(col) {
-  const t = col.type.toUpperCase();
-  if (t === 'NUMBER' || t === 'NUMERIC' || t === 'DECIMAL') {
-    if (col.precision && col.scale) return 'NUMERIC(' + col.precision + ',' + col.scale + ')';
-    if (col.precision && col.precision <= 5 && col.scale == null) return 'SMALLINT';
-    if (col.precision && col.precision <= 9 && col.scale == null) return 'INTEGER';
-    if (col.precision && col.precision <= 18 && col.scale == null) return 'BIGINT';
-    if (col.precision && col.scale == null) return 'NUMERIC(' + col.precision + ',0)';
-    return 'NUMERIC';
+function _matchDdlSource(col, parsed) {
+  var t = col.type.toUpperCase();
+  var matched = false;
+  for (var i=0; i<parsed.types.length; i++) {
+    var pt = parsed.types[i];
+    if (t === pt) { matched=true; break; }
+    if (pt === 'TIMESTAMP' && t.indexOf('TIMESTAMP') === 0) { matched=true; break; }
   }
-  if (t === 'INTEGER' || t === 'INT' || t === 'PLS_INTEGER' || t === 'BINARY_INTEGER') return 'INTEGER';
-  if (t === 'SMALLINT') return 'SMALLINT';
-  if (t === 'FLOAT' || t === 'BINARY_FLOAT') return 'REAL';
-  if (t === 'BINARY_DOUBLE') return 'DOUBLE PRECISION';
-  if (t === 'VARCHAR2' || t === 'NVARCHAR2') return 'VARCHAR(' + (col.length || 255) + ')';
-  if (t === 'CHAR' || t === 'NCHAR') return 'CHAR(' + (col.length || 1) + ')';
-  if (t === 'CLOB' || t === 'NCLOB' || t === 'LONG') return 'TEXT';
-  if (t === 'BLOB' || t === 'RAW' || t === 'LONG RAW') return 'BYTEA';
-  if (t === 'DATE') return 'TIMESTAMP';
-  if (t === 'TIMESTAMP' || t.startsWith('TIMESTAMP')) return 'TIMESTAMP';
-  if (t === 'BOOLEAN') return 'BOOLEAN';
-  if (t === 'XMLTYPE') return 'XML';
-  return col.rawType || t;
+  if (!matched) return false;
+  if (parsed.specificVal !== null) {
+    var cv = col.precision != null ? col.precision : col.length;
+    if (cv !== parsed.specificVal) return false;
+  }
+  if (parsed.hasPS) { if (!col.precision || col.scale == null) return false; }
+  if (parsed.hasP) { if (!col.precision) return false; if (col.scale != null && col.scale !== 0) return false; }
+  if (parsed.hasN) { if (!col.length) return false; }
+  if (parsed.cond) {
+    var p = col.precision; if (!p) return false;
+    if (parsed.cond.op === '<=' && !(p <= parsed.cond.val)) return false;
+    if (parsed.cond.op === '>=' && !(p >= parsed.cond.val)) return false;
+    if (parsed.cond.op === '<' && !(p < parsed.cond.val)) return false;
+    if (parsed.cond.op === '>' && !(p > parsed.cond.val)) return false;
+  }
+  return true;
 }
 
-function mysqlTypeToOracle(col) {
-  const t = col.type.toUpperCase();
-  if (t === 'TINYINT') return col.precision === 1 ? 'NUMBER(1)' : 'NUMBER(3)';
-  if (t === 'SMALLINT') return 'NUMBER(5)';
-  if (t === 'MEDIUMINT') return 'NUMBER(7)';
-  if (t === 'INT' || t === 'INTEGER') return 'NUMBER(10)';
-  if (t === 'BIGINT') return 'NUMBER(18)';
-  if (t === 'DECIMAL' || t === 'NUMERIC') return 'NUMBER' + (col.precision ? '(' + col.precision + (col.scale != null ? ',' + col.scale : '') + ')' : '');
-  if (t === 'FLOAT') return 'BINARY_FLOAT';
-  if (t === 'DOUBLE') return 'BINARY_DOUBLE';
-  if (t === 'VARCHAR') return 'VARCHAR2(' + (col.length || 255) + ')';
-  if (t === 'NVARCHAR') return 'NVARCHAR2(' + (col.length || 255) + ')';
-  if (t === 'CHAR') return 'CHAR(' + (col.length || 1) + ')';
-  if (t === 'TEXT' || t === 'MEDIUMTEXT' || t === 'LONGTEXT' || t === 'TINYTEXT') return 'CLOB';
-  if (t === 'BLOB' || t === 'MEDIUMBLOB' || t === 'LONGBLOB' || t === 'TINYBLOB') return 'BLOB';
-  if (t === 'VARBINARY') return 'RAW(' + (col.length || 2000) + ')';
-  if (t === 'BINARY') return 'RAW(' + (col.length || 1) + ')';
-  if (t === 'DATETIME') return col.length && col.length > 0 ? 'TIMESTAMP(' + col.length + ')' : 'DATE';
-  if (t === 'TIMESTAMP') return 'TIMESTAMP';
-  if (t === 'DATE') return 'DATE';
-  if (t === 'TIME') return 'VARCHAR2(20)';
-  if (t === 'YEAR') return 'NUMBER(4)';
-  if (t === 'BIT') return 'NUMBER(1)';
-  if (t === 'ENUM' || t === 'SET') return 'VARCHAR2(100)';
-  if (t === 'JSON') return 'CLOB';
-  if (t === 'BOOLEAN') return 'NUMBER(1)';
-  return t;
+function _applyDdlTarget(col, targetStr) {
+  var s = targetStr.trim();
+  var pm = s.match(/^(.+?)\(([^)]*)\)$/);
+  if (!pm) return s;
+  var base = pm[1].trim(), inner = pm[2].trim();
+  if (inner === 'n') return base + '(' + (col.length || 255) + ')';
+  if (inner === 'p,s') return base + '(' + (col.precision||38) + ',' + (col.scale!=null?col.scale:0) + ')';
+  if (inner === 'p,0') return base + '(' + (col.precision||38) + ',0)';
+  if (inner === 'p') return base + '(' + (col.precision||38) + ')';
+  return s;
 }
 
-function mysqlTypeToPG(col) {
-  const t = col.type.toUpperCase();
-  if (t === 'TINYINT') return col.precision === 1 ? 'BOOLEAN' : 'SMALLINT';
-  if (t === 'SMALLINT') return 'SMALLINT';
-  if (t === 'MEDIUMINT' || t === 'INT' || t === 'INTEGER') return 'INTEGER';
-  if (t === 'BIGINT') return 'BIGINT';
-  if (t === 'DECIMAL' || t === 'NUMERIC') return 'NUMERIC' + (col.precision ? '(' + col.precision + (col.scale != null ? ',' + col.scale : '') + ')' : '');
-  if (t === 'FLOAT') return 'REAL';
-  if (t === 'DOUBLE') return 'DOUBLE PRECISION';
-  if (t === 'VARCHAR') return 'VARCHAR(' + (col.length || 255) + ')';
-  if (t === 'NVARCHAR') return 'VARCHAR(' + (col.length || 255) + ')';
-  if (t === 'CHAR') return 'CHAR(' + (col.length || 1) + ')';
-  if (t === 'TEXT' || t === 'MEDIUMTEXT' || t === 'LONGTEXT' || t === 'TINYTEXT') return 'TEXT';
-  if (t === 'BLOB' || t === 'MEDIUMBLOB' || t === 'LONGBLOB' || t === 'TINYBLOB') return 'BYTEA';
-  if (t === 'VARBINARY' || t === 'BINARY') return 'BYTEA';
-  if (t === 'DATETIME' || t === 'TIMESTAMP') return 'TIMESTAMP';
-  if (t === 'DATE') return 'DATE';
-  if (t === 'TIME') return 'TIME';
-  if (t === 'YEAR') return 'INTEGER';
-  if (t === 'BIT') return 'BOOLEAN';
-  if (t === 'ENUM' || t === 'SET') return 'VARCHAR(100)';
-  if (t === 'JSON') return 'JSONB';
-  if (t === 'BOOLEAN') return 'BOOLEAN';
-  return t;
+function _mapTypeByRules(col, rules) {
+  if (!rules || !rules.length) return col.rawType || col.type;
+  for (var i=0; i<rules.length; i++) {
+    var r = rules[i];
+    if (!r.source || !r.target) continue;
+    var parsed = _parseDdlSource(r.source);
+    if (_matchDdlSource(col, parsed)) return _applyDdlTarget(col, r.target);
+  }
+  return col.rawType || col.type;
 }
 
-function pgTypeToOracle(col) {
-  const t = col.type.toUpperCase();
-  if (t === 'BIGSERIAL') return 'NUMBER(18)';
-  if (t === 'SERIAL') return 'NUMBER(10)';
-  if (t === 'SMALLSERIAL') return 'NUMBER(5)';
-  if (t === 'SMALLINT') return 'NUMBER(5)';
-  if (t === 'INTEGER' || t === 'INT') return 'NUMBER(10)';
-  if (t === 'BIGINT') return 'NUMBER(18)';
-  if (t === 'NUMERIC' || t === 'DECIMAL') return 'NUMBER' + (col.precision ? '(' + col.precision + (col.scale != null ? ',' + col.scale : '') + ')' : '');
-  if (t === 'REAL') return 'BINARY_FLOAT';
-  if (t === 'DOUBLE PRECISION') return 'BINARY_DOUBLE';
-  if (t === 'VARCHAR' || t === 'CHARACTER VARYING') return 'VARCHAR2(' + (col.length || 255) + ')';
-  if (t === 'CHAR' || t === 'CHARACTER') return 'CHAR(' + (col.length || 1) + ')';
-  if (t === 'TEXT') return 'CLOB';
-  if (t === 'BYTEA') return 'BLOB';
-  if (t === 'BOOLEAN') return 'NUMBER(1)';
-  if (t === 'TIMESTAMP' || t === 'TIMESTAMP WITHOUT TIME ZONE' || t === 'TIMESTAMP WITH TIME ZONE') return 'TIMESTAMP';
-  if (t === 'DATE') return 'DATE';
-  if (t === 'TIME' || t === 'TIME WITHOUT TIME ZONE') return 'VARCHAR2(20)';
-  if (t === 'JSON' || t === 'JSONB') return 'CLOB';
-  if (t === 'XML') return 'XMLTYPE';
-  if (t === 'UUID') return 'RAW(16)';
-  return t;
-}
-
-function pgTypeToMySQL(col) {
-  const t = col.type.toUpperCase();
-  if (t === 'BIGSERIAL') return 'BIGINT';
-  if (t === 'SERIAL') return 'INT';
-  if (t === 'SMALLSERIAL') return 'SMALLINT';
-  if (t === 'SMALLINT') return 'SMALLINT';
-  if (t === 'INTEGER' || t === 'INT') return 'INT';
-  if (t === 'BIGINT') return 'BIGINT';
-  if (t === 'NUMERIC' || t === 'DECIMAL') return 'DECIMAL' + (col.precision ? '(' + col.precision + (col.scale != null ? ',' + col.scale : '') + ')' : '(38,10)');
-  if (t === 'REAL') return 'FLOAT';
-  if (t === 'DOUBLE PRECISION') return 'DOUBLE';
-  if (t === 'VARCHAR' || t === 'CHARACTER VARYING') return 'VARCHAR(' + (col.length || 255) + ')';
-  if (t === 'CHAR' || t === 'CHARACTER') return 'CHAR(' + (col.length || 1) + ')';
-  if (t === 'TEXT') return 'LONGTEXT';
-  if (t === 'BYTEA') return 'LONGBLOB';
-  if (t === 'BOOLEAN') return 'TINYINT(1)';
-  if (t === 'TIMESTAMP' || t.includes('TIMESTAMP')) return 'TIMESTAMP(6)';
-  if (t === 'DATE') return 'DATE';
-  if (t === 'TIME' || t.includes('TIME')) return 'TIME';
-  if (t === 'JSON' || t === 'JSONB') return 'JSON';
-  if (t === 'XML') return 'LONGTEXT';
-  if (t === 'UUID') return 'CHAR(36)';
-  return t;
-}
+/* ===== TYPE MAPPER WRAPPERS (read from _ddlRulesData) ===== */
+function oracleTypeToMySQL(col) { return _mapTypeByRules(col, _ddlRulesData.oracleToMysql); }
+function oracleTypeToPG(col)    { return _mapTypeByRules(col, _ddlRulesData.oracleToPg); }
+function mysqlTypeToOracle(col) { return _mapTypeByRules(col, _ddlRulesData.mysqlToOracle); }
+function mysqlTypeToPG(col)     { return _mapTypeByRules(col, _ddlRulesData.mysqlToPg); }
+function pgTypeToOracle(col)    { return _mapTypeByRules(col, _ddlRulesData.pgToOracle); }
+function pgTypeToMySQL(col)     { return _mapTypeByRules(col, _ddlRulesData.pgToMysql); }
 
 /* Default value conversion */
 function convertDefault(val, from, to) {
@@ -5520,117 +5629,8 @@ const app = createApp({
     const statusText = ref('');
     const fileInput = ref(null);
 
-    // --- DDL Rules state ---
-    const ddlRules = ref({
-      oraclePg: [
-        {source:'NUMBER(p,s)',target:'NUMERIC(p,s)'},
-        {source:'NUMBER(p)',target:'NUMERIC(p)'},
-        {source:'NUMBER',target:'NUMERIC'},
-        {source:'VARCHAR2(n)',target:'VARCHAR(n)'},
-        {source:'NVARCHAR2(n)',target:'VARCHAR(n)'},
-        {source:'CHAR(n)',target:'CHAR(n)'},
-        {source:'CLOB',target:'TEXT'},
-        {source:'BLOB',target:'BYTEA'},
-        {source:'DATE',target:'TIMESTAMP'},
-        {source:'TIMESTAMP',target:'TIMESTAMP'},
-        {source:'RAW(n)',target:'BYTEA'},
-        {source:'LONG',target:'TEXT'},
-        {source:'NCLOB',target:'TEXT'},
-        {source:'BINARY_FLOAT',target:'REAL'},
-        {source:'BINARY_DOUBLE',target:'DOUBLE PRECISION'},
-        {source:'XMLTYPE',target:'XML'},
-        {source:'GENERATED...AS IDENTITY',target:'GENERATED...AS IDENTITY'},
-        {source:'SYSDATE',target:'CURRENT_DATE'},
-        {source:'SYSTIMESTAMP',target:'CLOCK_TIMESTAMP()'},
-        {source:'NVL',target:'COALESCE'},
-        {source:'SMALLINT',target:'SMALLINT'},
-        {source:'INTEGER / INT',target:'INTEGER'},
-        {source:'FLOAT',target:'REAL'},
-        {source:'LONG RAW',target:'BYTEA'},
-        {source:'BOOLEAN',target:'BOOLEAN'},
-        {source:'PLS_INTEGER / BINARY_INTEGER',target:'INTEGER'},
-        {source:'SERIAL (PG)',target:'NUMBER(10) (Oracle)'},
-        {source:'BIGSERIAL (PG)',target:'NUMBER(18) (Oracle)'},
-        {source:'SMALLSERIAL (PG)',target:'NUMBER(5) (Oracle)'},
-        {source:'UUID (PG)',target:'RAW(16) (Oracle)'},
-        {source:'JSON / JSONB (PG)',target:'CLOB (Oracle)'}
-      ],
-      oracleMysql: [
-        {source:'NUMBER(p,s)',target:'DECIMAL(p,s)'},
-        {source:'NUMBER(p) [p<=10]',target:'INT'},
-        {source:'NUMBER(p) [p>10]',target:'BIGINT'},
-        {source:'NUMBER',target:'DECIMAL(38,10)'},
-        {source:'VARCHAR2(n)',target:'VARCHAR(n)'},
-        {source:'NVARCHAR2(n)',target:'VARCHAR(n)'},
-        {source:'CHAR(n)',target:'CHAR(n)'},
-        {source:'CLOB',target:'LONGTEXT'},
-        {source:'BLOB',target:'LONGBLOB'},
-        {source:'DATE',target:'DATETIME'},
-        {source:'TIMESTAMP',target:'DATETIME(6)'},
-        {source:'RAW(n)',target:'VARBINARY(n)'},
-        {source:'LONG',target:'LONGTEXT'},
-        {source:'NCLOB',target:'LONGTEXT'},
-        {source:'BINARY_FLOAT',target:'FLOAT'},
-        {source:'BINARY_DOUBLE',target:'DOUBLE'},
-        {source:'XMLTYPE',target:'LONGTEXT'},
-        {source:'GENERATED...AS IDENTITY',target:'AUTO_INCREMENT'},
-        {source:'SYSDATE',target:'NOW()'},
-        {source:'NVL',target:'IFNULL'},
-        {source:'SMALLINT',target:'SMALLINT'},
-        {source:'INTEGER / INT',target:'INT'},
-        {source:'FLOAT',target:'DOUBLE'},
-        {source:'LONG RAW',target:'LONGBLOB'},
-        {source:'BOOLEAN',target:'TINYINT(1)'},
-        {source:'PLS_INTEGER / BINARY_INTEGER',target:'INT'},
-        {source:'TINYINT (MySQL)',target:'NUMBER(3) (Oracle)'},
-        {source:'MEDIUMINT (MySQL)',target:'NUMBER(7) (Oracle)'},
-        {source:'YEAR (MySQL)',target:'NUMBER(4) (Oracle)'},
-        {source:'BIT (MySQL)',target:'NUMBER(1) (Oracle)'},
-        {source:'ENUM / SET (MySQL)',target:'VARCHAR2(100) (Oracle)'},
-        {source:'JSON (MySQL)',target:'CLOB (Oracle)'},
-        {source:'TIME (MySQL)',target:'VARCHAR2(20) (Oracle)'}
-      ],
-      mysqlPg: [
-        {source:'INT',target:'INTEGER'},
-        {source:'BIGINT',target:'BIGINT'},
-        {source:'TINYINT(1)',target:'BOOLEAN'},
-        {source:'TINYINT',target:'SMALLINT'},
-        {source:'SMALLINT',target:'SMALLINT'},
-        {source:'MEDIUMINT',target:'INTEGER'},
-        {source:'FLOAT',target:'REAL'},
-        {source:'DOUBLE',target:'DOUBLE PRECISION'},
-        {source:'DECIMAL(p,s)',target:'NUMERIC(p,s)'},
-        {source:'VARCHAR(n)',target:'VARCHAR(n)'},
-        {source:'CHAR(n)',target:'CHAR(n)'},
-        {source:'TEXT',target:'TEXT'},
-        {source:'LONGTEXT',target:'TEXT'},
-        {source:'MEDIUMTEXT',target:'TEXT'},
-        {source:'TINYTEXT',target:'TEXT'},
-        {source:'BLOB',target:'BYTEA'},
-        {source:'LONGBLOB',target:'BYTEA'},
-        {source:'DATETIME',target:'TIMESTAMP'},
-        {source:'DATETIME(6)',target:'TIMESTAMP(6)'},
-        {source:'DATE',target:'DATE'},
-        {source:'TIME',target:'TIME'},
-        {source:'JSON',target:'JSONB'},
-        {source:'ENUM(...)',target:'VARCHAR(255)'},
-        {source:'SET(...)',target:'VARCHAR(255)'},
-        {source:'AUTO_INCREMENT',target:'GENERATED...AS IDENTITY'},
-        {source:'NOW()',target:'CURRENT_TIMESTAMP'},
-        {source:'IFNULL',target:'COALESCE'},
-        {source:'NVARCHAR',target:'VARCHAR'},
-        {source:'VARBINARY',target:'BYTEA'},
-        {source:'BINARY',target:'BYTEA'},
-        {source:'BIT',target:'BOOLEAN'},
-        {source:'YEAR',target:'INTEGER'},
-        {source:'SERIAL (PG)',target:'INT (MySQL)'},
-        {source:'BIGSERIAL (PG)',target:'BIGINT (MySQL)'},
-        {source:'SMALLSERIAL (PG)',target:'SMALLINT (MySQL)'},
-        {source:'UUID (PG)',target:'CHAR(36) (MySQL)'},
-        {source:'XML (PG)',target:'LONGTEXT (MySQL)'},
-        {source:'JSONB (PG)',target:'JSON (MySQL)'}
-      ]
-    });
+    // --- DDL Rules state (reads from global _ddlRulesData, shared with engine) ---
+    const ddlRules = ref(_ddlRulesData);
 
     function addRule(category) {
       ddlRules.value[category].push({source:'',target:''});
@@ -5898,10 +5898,43 @@ const app = createApp({
       return { type: 'success', text: '未发现明显兼容问题' };
     });
 
+    // --- DDL rule category labels ---
+    const DDL_CATS = [
+      {key:'oracleToMysql', label:'Oracle → MySQL', pair:'oracleMysql'},
+      {key:'mysqlToOracle', label:'MySQL → Oracle', pair:'oracleMysql'},
+      {key:'oracleToPg', label:'Oracle → PostgreSQL', pair:'oraclePg'},
+      {key:'pgToOracle', label:'PostgreSQL → Oracle', pair:'oraclePg'},
+      {key:'mysqlToPg', label:'MySQL → PostgreSQL', pair:'mysqlPg'},
+      {key:'pgToMysql', label:'PostgreSQL → MySQL', pair:'mysqlPg'}
+    ];
+    const BODY_CATS = ['oraclePg','oracleMysql','mysqlPg'];
+    const ddlRuleCats = computed(function() {
+      var dir = ruleFilterDir.value;
+      if (dir === 'all') return DDL_CATS;
+      return DDL_CATS.filter(function(c) { return c.key === dir || c.key === _pairReverse(dir); });
+    });
+    function _pairReverse(dir) {
+      var map = {oracleToMysql:'mysqlToOracle',mysqlToOracle:'oracleToMysql',
+        oracleToPg:'pgToOracle',pgToOracle:'oracleToPg',
+        mysqlToPg:'pgToMysql',pgToMysql:'mysqlToPg'};
+      return map[dir] || '';
+    }
+
     // --- Filtered rules for search ---
     function filterRules(rulesObj, dir, query) {
       var result = {};
-      var cats = dir === 'all' ? ['oraclePg','oracleMysql','mysqlPg'] : [dir];
+      var cats = Object.keys(rulesObj);
+      if (dir !== 'all') {
+        // Map directional filter to matching category keys
+        var dirToBiMap = {oracleToMysql:'oracleMysql',mysqlToOracle:'oracleMysql',
+          oracleToPg:'oraclePg',pgToOracle:'oraclePg',
+          mysqlToPg:'mysqlPg',pgToMysql:'mysqlPg'};
+        var rev = _pairReverse(dir);
+        var biKey = dirToBiMap[dir];
+        cats = cats.filter(function(c) {
+          return c === dir || c === rev || c === biKey || (rev && c === dirToBiMap[rev]);
+        });
+      }
       cats.forEach(function(cat) {
         if (rulesObj[cat]) {
           result[cat] = query ? rulesObj[cat].filter(function(r) {
@@ -6195,7 +6228,8 @@ const app = createApp({
       ruleModal, openRuleModal, confirmRuleModal,
       // New redesign state
       showRulesMenu, refCollapsed, ruleSearchQuery, ruleFilterDir,
-      outputStatus, filteredDdlRules, filteredBodyRules, toggleRef
+      outputStatus, filteredDdlRules, filteredBodyRules, toggleRef,
+      ddlRuleCats
     };
   }
 });
