@@ -235,9 +235,9 @@ textarea::placeholder{color:var(--text-muted)}
 .rules-grid.single-col{grid-template-columns:1fr}
 /* Modal */
 .rule-modal-mask{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;animation:fadeIn .15s}
-.rule-modal{background:var(--bg);border-radius:var(--radius);box-shadow:0 12px 40px rgba(0,0,0,.18);width:420px;max-width:92vw;overflow:hidden;animation:slideUp .2s}
-.rule-modal-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.rule-modal-head h4{font-size:14px;font-weight:700;color:var(--text);margin:0}
+.rule-modal{background:var(--bg);border-radius:var(--radius);box-shadow:0 12px 40px rgba(0,0,0,.18);width:420px;max-width:92vw;overflow:hidden;animation:slideUp .2s;position:relative}
+.rule-modal-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;cursor:move;user-select:none}
+.rule-modal-head h4{font-size:14px;font-weight:700;color:var(--text);margin:0;pointer-events:none}
 .rule-modal-close{background:none;border:none;font-size:18px;color:var(--text-muted);cursor:pointer;padding:2px 6px;border-radius:4px;line-height:1}
 .rule-modal-close:hover{background:var(--bg-secondary);color:var(--text)}
 .rule-modal-body{padding:18px}
@@ -741,10 +741,26 @@ $$;</pre>
         </section>
       </template>
 
+      <!-- ==================== CUSTOM ALERT MODAL ==================== -->
+      <div class="rule-modal-mask" v-if="alertModal.visible" @click.self="alertModal.visible=false">
+        <div class="rule-modal" ref="alertModalRef" style="width:340px" :style="alertModal.dragStyle">
+          <div class="rule-modal-head" @mousedown="startDrag($event, 'alert')">
+            <h4>{{alertModal.title}}</h4>
+            <button class="rule-modal-close" @click="alertModal.visible=false">&times;</button>
+          </div>
+          <div class="rule-modal-body" style="text-align:center;padding:24px 18px">
+            <p style="font-size:13px;color:var(--text);margin:0">{{alertModal.message}}</p>
+          </div>
+          <div class="rule-modal-foot" style="justify-content:center">
+            <button class="btn-modal primary" @click="alertModal.visible=false">知道了</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ==================== RULE EDIT MODAL ==================== -->
       <div class="rule-modal-mask" v-if="ruleModal.visible" @click.self="ruleModal.visible=false">
-        <div class="rule-modal">
-          <div class="rule-modal-head">
+        <div class="rule-modal" ref="ruleModalRef" :style="ruleModal.dragStyle">
+          <div class="rule-modal-head" @mousedown="startDrag($event, 'rule')">
             <h4>{{ruleModal.index===-1 ? '新增规则' : '维护规则'}}</h4>
             <button class="rule-modal-close" @click="ruleModal.visible=false">&times;</button>
           </div>
@@ -5406,8 +5422,39 @@ const app = createApp({
       category: '', // 'oraclePg', 'oracleMysql', 'mysqlPg'
       index: -1, // -1 = new
       source: '',
-      target: ''
+      target: '',
+      dragStyle: {}
     });
+    const ruleModalRef = ref(null);
+
+    const alertModal = ref({ visible: false, title: '', message: '', dragStyle: {} });
+    const alertModalRef = ref(null);
+
+    function _showAlert(title, message) {
+      alertModal.value = { visible: true, title: title, message: message, dragStyle: {} };
+    }
+
+    // --- Drag logic for modals ---
+    var _dragState = null;
+    function startDrag(e, which) {
+      if (e.button !== 0) return;
+      var modalEl = which === 'rule' ? ruleModalRef.value : alertModalRef.value;
+      if (!modalEl) return;
+      var rect = modalEl.getBoundingClientRect();
+      _dragState = { which: which, startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top, w: rect.width, h: rect.height };
+      e.preventDefault();
+    }
+    function _onDragMove(e) {
+      if (!_dragState) return;
+      var dx = e.clientX - _dragState.startX;
+      var dy = e.clientY - _dragState.startY;
+      var newLeft = _dragState.origLeft + dx;
+      var newTop = _dragState.origTop + dy;
+      var style = { position: 'fixed', left: newLeft + 'px', top: newTop + 'px', margin: '0' };
+      if (_dragState.which === 'rule') { ruleModal.value.dragStyle = style; }
+      else { alertModal.value.dragStyle = style; }
+    }
+    function _onDragEnd() { _dragState = null; }
 
     function openRuleModal(type, category, index) {
       ruleModal.value.type = type;
@@ -5428,6 +5475,7 @@ const app = createApp({
         ruleModal.value.source = '';
         ruleModal.value.target = '';
       }
+      ruleModal.value.dragStyle = {};
       ruleModal.value.visible = true;
     }
 
@@ -5452,7 +5500,7 @@ const app = createApp({
           statusText.value = '已新增规则: ' + src + ' → ' + tgt;
         } else {
           if (!src && !tgt) {
-            if (!_isAdmin()) { alert('非管理员不允许删除规则'); ruleModal.value.visible = false; return; }
+            if (!_isAdmin()) { _showAlert('操作受限', '非管理员不允许删除规则'); ruleModal.value.visible = false; return; }
             arr.splice(m.index, 1);
             triggerRef(_bodyRulesRef);
             statusText.value = '已删除规则';
@@ -5471,7 +5519,7 @@ const app = createApp({
           statusText.value = '已新增规则: ' + src + ' → ' + tgt;
         } else {
           if (!src && !tgt) {
-            if (!_isAdmin()) { alert('非管理员不允许删除规则'); ruleModal.value.visible = false; return; }
+            if (!_isAdmin()) { _showAlert('操作受限', '非管理员不允许删除规则'); ruleModal.value.visible = false; return; }
             store.value[m.category].splice(m.index, 1);
             statusText.value = '已删除规则';
           } else {
@@ -5821,10 +5869,15 @@ const app = createApp({
           showRulesMenu.value = false;
         }
       });
+      // Drag event listeners for modals
+      window.addEventListener('mousemove', _onDragMove);
+      window.addEventListener('mouseup', _onDragEnd);
     });
     onUnmounted(() => {
       if (scrollHandler) window.removeEventListener('scroll', scrollHandler);
       if (keyHandler) window.removeEventListener('keydown', keyHandler);
+      window.removeEventListener('mousemove', _onDragMove);
+      window.removeEventListener('mouseup', _onDragEnd);
     });
 
     return {
@@ -5847,7 +5900,8 @@ const app = createApp({
       // Rules
       ddlRules, addRule, deleteRule, saveRule,
       bodyRules, addBodyRule, deleteBodyRule, saveBodyRule,
-      ruleModal, openRuleModal, confirmRuleModal,
+      ruleModal, ruleModalRef, openRuleModal, confirmRuleModal,
+      alertModal, alertModalRef, startDrag,
       // New redesign state
       showRulesMenu, refCollapsed, ruleSearchQuery, ruleFilterDir,
       ddlRuleTab, bodyRuleTab, DDL_CATS_ALL, BODY_CATS_ALL,
