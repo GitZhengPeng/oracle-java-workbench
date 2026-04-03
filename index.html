@@ -64,6 +64,11 @@
 :root:not([data-theme="light"]) textarea.output-area:focus{background:var(--bg-secondary)}
 [data-theme="dark"] .error-msg,
 :root:not([data-theme="light"]) .error-msg{background:#3b1a1a;border-color:#7f1d1d}
+/* Dark mode visual bridges (poster → workbench continuity) */
+[data-theme="dark"] body,:root:not([data-theme="light"]) body{background:radial-gradient(ellipse 80% 60% at 50% 0%,#111827 0%,#0f172a 50%,#06080f 100%)}
+[data-theme="dark"] .sidebar,:root:not([data-theme="light"]) .sidebar{background:#0c1222;border-right-color:rgba(51,65,85,.5)}
+[data-theme="dark"] .sidebar-logo,:root:not([data-theme="light"]) .sidebar-logo{box-shadow:0 0 12px rgba(37,99,235,.35)}
+[data-theme="dark"] .nav-item.active,:root:not([data-theme="light"]) .nav-item.active{box-shadow:inset 0 0 0 1px rgba(59,130,246,.15),0 0 8px rgba(59,130,246,.08)}
 .theme-toggle{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text-secondary);cursor:pointer;transition:all .2s;margin-left:8px;flex-shrink:0}
 .theme-toggle:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-bg)}
 .theme-toggle svg{width:16px;height:16px}
@@ -123,7 +128,7 @@ body{font-family:var(--font-body);color:var(--text);background:var(--bg-secondar
 .sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);background:var(--bg);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100vh;z-index:30;transition:transform .3s ease}
 .sidebar-brand{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;height:var(--header-h)}
 .sidebar-logo{width:32px;height:32px;border-radius:var(--radius);flex-shrink:0;background:var(--accent);display:grid;place-items:center;font-family:var(--font-code);font-size:9px;font-weight:700;color:#fff;letter-spacing:.5px}
-.sidebar-title{font-size:15px;font-weight:700;color:var(--text);letter-spacing:-.3px}
+.sidebar-title{font-family:'Instrument Serif',serif;font-size:17px;font-weight:400;font-style:italic;color:var(--text);letter-spacing:0}
 .sidebar-nav{flex:1;padding:12px;display:flex;flex-direction:column;gap:2px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--radius-sm);cursor:pointer;color:var(--text-secondary);font-size:13.5px;font-weight:500;transition:all .15s;user-select:none;background:none;border:none;width:100%;text-align:left;font-family:inherit;line-height:inherit}
 .nav-item:hover{background:var(--bg-tertiary);color:var(--text)}
@@ -1039,6 +1044,12 @@ $$;</pre>
 
   /* Dismiss */
   window.dismissSplash=function(){
+    /* Force dark theme on first entry for visual continuity with poster */
+    document.documentElement.setAttribute('data-theme','dark');
+    localStorage.setItem('theme','dark');
+    /* Fade in the workbench */
+    var appEl=document.getElementById('app');
+    if(appEl){appEl.style.opacity='0';appEl.style.transition='opacity .6s ease .1s';requestAnimationFrame(function(){appEl.style.opacity='1'});}
     poster.classList.add('leaving');
     clearInterval(tokInterval);
     setTimeout(function(){
