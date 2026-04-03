@@ -688,9 +688,13 @@ $$;</pre>
         <section class="rules-page">
           <div class="rules-header">
             <h2>DDL 映射规则管理</h2>
-            <select class="db-select rule-dir-select" v-model="ddlRuleTab">
-              <option v-for="cat in DDL_CATS_ALL" :key="cat.key" :value="cat.key">{{cat.label}} ({{(ddlRules[cat.key]||[]).length}})</option>
-            </select>
+            <div style="display:flex;align-items:center;gap:8px">
+              <button class="btn-rule" :disabled="!canUndoRule" @click="undoRule" title="撤销上一步规则操作" style="opacity:1" :style="{opacity: canUndoRule ? 1 : 0.4, cursor: canUndoRule ? 'pointer' : 'not-allowed'}">↩ 撤销</button>
+              <button class="btn-rule" @click="resetDdlRules" title="重置DDL规则为内置默认值">⟳ 重置为默认</button>
+              <select class="db-select rule-dir-select" v-model="ddlRuleTab">
+                <option v-for="cat in DDL_CATS_ALL" :key="cat.key" :value="cat.key">{{cat.label}} ({{(ddlRules[cat.key]||[]).length}})</option>
+              </select>
+            </div>
           </div>
           <div class="rules-grid single-col">
             <template v-for="cat in ddlRuleCatsFiltered" :key="cat.key">
@@ -717,9 +721,13 @@ $$;</pre>
         <section class="rules-page">
           <div class="rules-header">
             <h2>程序块映射规则管理</h2>
-            <select class="db-select rule-dir-select" v-model="bodyRuleTab">
-              <option v-for="cat in BODY_CATS_ALL" :key="cat.key" :value="cat.key">{{cat.label}} ({{(bodyRules[cat.key]||[]).length}})</option>
-            </select>
+            <div style="display:flex;align-items:center;gap:8px">
+              <button class="btn-rule" :disabled="!canUndoRule" @click="undoRule" title="撤销上一步规则操作" :style="{opacity: canUndoRule ? 1 : 0.4, cursor: canUndoRule ? 'pointer' : 'not-allowed'}">↩ 撤销</button>
+              <button class="btn-rule" @click="resetBodyRules" title="重置程序块规则为内置默认值">⟳ 重置为默认</button>
+              <select class="db-select rule-dir-select" v-model="bodyRuleTab">
+                <option v-for="cat in BODY_CATS_ALL" :key="cat.key" :value="cat.key">{{cat.label}} ({{(bodyRules[cat.key]||[]).length}})</option>
+              </select>
+            </div>
           </div>
           <div class="rules-grid single-col">
             <template v-for="cat in bodyCatsFiltered" :key="cat.key">
@@ -2472,6 +2480,9 @@ var _ddlRulesData = {
     {source:'UUID',target:'CHAR(36)'}
   ]
 };
+
+/* ===== DEFAULT RULES SNAPSHOT (frozen, for reset) ===== */
+var _ddlRulesDefault = JSON.parse(JSON.stringify(_ddlRulesData));
 
 /* ===== RULE-DRIVEN TYPE MATCHING ENGINE ===== */
 function _parseDdlSource(src) {
@@ -4457,6 +4468,22 @@ var _bodyRulesData = {
   ]
 };
 
+/* ===== BODY RULES DEFAULT SNAPSHOT (preserves function refs, for reset) ===== */
+function _deepCloneBodyRules(src) {
+  var result = {};
+  for (var key in src) {
+    if (!src.hasOwnProperty(key)) continue;
+    result[key] = src[key].map(function(r) {
+      var clone = {s: r.s, t: r.t, fwd: r.fwd, rev: r.rev};
+      if (r.typeFwd !== undefined) clone.typeFwd = r.typeFwd;
+      if (r.typeRev !== undefined) clone.typeRev = r.typeRev;
+      return clone;
+    });
+  }
+  return result;
+}
+var _bodyRulesDefault = _deepCloneBodyRules(_bodyRulesData);
+
 /* ===== New rule-driven mapParamType ===== */
 function mapParamType(typeStr, fromDb, toDb) {
   if (!typeStr) return typeStr;
@@ -5387,10 +5414,78 @@ const app = createApp({
     // --- DDL Rules state (reads from global _ddlRulesData, shared with engine) ---
     const ddlRules = ref(_ddlRulesData);
 
+    // --- Undo history for rules ---
+    var _ruleUndoStack = [];
+    var _UNDO_MAX = 50;
+
+    function _snapshotDdlRules() {
+      return JSON.parse(JSON.stringify(ddlRules.value));
+    }
+    function _snapshotBodyRules() {
+      return _deepCloneBodyRules(_bodyRulesRef.value);
+    }
+    function _pushUndo(type) {
+      // type: 'ddl' | 'body'
+      var snap = { type: type };
+      if (type === 'ddl') {
+        snap.data = _snapshotDdlRules();
+      } else {
+        snap.data = _snapshotBodyRules();
+      }
+      _ruleUndoStack.push(snap);
+      if (_ruleUndoStack.length > _UNDO_MAX) _ruleUndoStack.shift();
+      canUndoRule.value = true;
+    }
+    const canUndoRule = ref(false);
+
+    function undoRule() {
+      if (_ruleUndoStack.length === 0) return;
+      var snap = _ruleUndoStack.pop();
+      if (snap.type === 'ddl') {
+        // Restore DDL rules — must update _ddlRulesData in-place for engine
+        var restored = snap.data;
+        for (var k in restored) { _ddlRulesData[k] = restored[k]; }
+        for (var k2 in _ddlRulesData) { if (!(k2 in restored)) delete _ddlRulesData[k2]; }
+        ddlRules.value = _ddlRulesData;
+        triggerRef(ddlRules);
+      } else {
+        // Restore body rules — update _bodyRulesData in-place for engine
+        var restored2 = snap.data;
+        for (var k3 in restored2) { _bodyRulesData[k3] = restored2[k3]; }
+        for (var k4 in _bodyRulesData) { if (!(k4 in restored2)) delete _bodyRulesData[k4]; }
+        _bodyRulesRef.value = _bodyRulesData;
+        triggerRef(_bodyRulesRef);
+      }
+      canUndoRule.value = _ruleUndoStack.length > 0;
+      statusText.value = '已撤销上一步规则操作';
+    }
+
+    function resetDdlRules() {
+      _pushUndo('ddl');
+      var fresh = JSON.parse(JSON.stringify(_ddlRulesDefault));
+      for (var k in fresh) { _ddlRulesData[k] = fresh[k]; }
+      for (var k2 in _ddlRulesData) { if (!(k2 in fresh)) delete _ddlRulesData[k2]; }
+      ddlRules.value = _ddlRulesData;
+      triggerRef(ddlRules);
+      statusText.value = 'DDL 映射规则已重置为默认';
+    }
+
+    function resetBodyRules() {
+      _pushUndo('body');
+      var fresh = _deepCloneBodyRules(_bodyRulesDefault);
+      for (var k in fresh) { _bodyRulesData[k] = fresh[k]; }
+      for (var k2 in _bodyRulesData) { if (!(k2 in fresh)) delete _bodyRulesData[k2]; }
+      _bodyRulesRef.value = _bodyRulesData;
+      triggerRef(_bodyRulesRef);
+      statusText.value = '程序块映射规则已重置为默认';
+    }
+
     function addRule(category) {
+      _pushUndo('ddl');
       ddlRules.value[category].push({source:'',target:''});
     }
     function deleteRule(category, index) {
+      _pushUndo('ddl');
       ddlRules.value[category].splice(index, 1);
     }
     function saveRule(category, index) {
@@ -5415,11 +5510,13 @@ const app = createApp({
 
 
     function addBodyRule(category) {
+      _pushUndo('body');
       var info = _bodyDirInfo(category);
       if (!info) return;
       _bodyRulesRef.value[info.pair].push({s:'', t:'', fwd:null, rev:null});
     }
     function deleteBodyRule(category, index) {
+      _pushUndo('body');
       var info = _bodyDirInfo(category);
       if (!info) return;
       _bodyRulesRef.value[info.pair].splice(index, 1);
@@ -5504,6 +5601,8 @@ const app = createApp({
       var m = ruleModal.value;
       var src = m.source.trim();
       var tgt = m.target.trim();
+      // Skip undo for no-op (both empty on new rule)
+      var isNoOp = (m.index === -1 && !src && !tgt);
       if (m.type === 'body') {
         var info = _bodyDirInfo(m.category);
         var arr = _bodyRulesRef.value[info.pair];
@@ -5511,16 +5610,19 @@ const app = createApp({
         var tVal = info.forward ? tgt : src;
         if (m.index === -1) {
           if (!src && !tgt) { ruleModal.value.visible = false; return; }
+          _pushUndo('body');
           arr.push({s: sVal, t: tVal, fwd: null, rev: null});
           triggerRef(_bodyRulesRef);
           statusText.value = '已新增规则: ' + src + ' → ' + tgt;
         } else {
           if (!src && !tgt) {
             if (!_isAdmin()) { _showAlert('操作受限', '非管理员不允许删除规则'); ruleModal.value.visible = false; return; }
+            _pushUndo('body');
             arr.splice(m.index, 1);
             triggerRef(_bodyRulesRef);
             statusText.value = '已删除规则';
           } else {
+            _pushUndo('body');
             arr[m.index].s = sVal;
             arr[m.index].t = tVal;
             triggerRef(_bodyRulesRef);
@@ -5531,14 +5633,17 @@ const app = createApp({
         var store = ddlRules;
         if (m.index === -1) {
           if (!src && !tgt) { ruleModal.value.visible = false; return; }
+          _pushUndo('ddl');
           store.value[m.category].push({source: src, target: tgt});
           statusText.value = '已新增规则: ' + src + ' → ' + tgt;
         } else {
           if (!src && !tgt) {
             if (!_isAdmin()) { _showAlert('操作受限', '非管理员不允许删除规则'); ruleModal.value.visible = false; return; }
+            _pushUndo('ddl');
             store.value[m.category].splice(m.index, 1);
             statusText.value = '已删除规则';
           } else {
+            _pushUndo('ddl');
             store.value[m.category][m.index].source = src;
             store.value[m.category][m.index].target = tgt;
             statusText.value = '已保存规则: ' + src + ' → ' + tgt;
@@ -5918,6 +6023,7 @@ const app = createApp({
       bodyRules, addBodyRule, deleteBodyRule, saveBodyRule,
       ruleModal, ruleModalRef, openRuleModal, confirmRuleModal,
       alertModal, alertModalRef, startDrag,
+      canUndoRule, undoRule, resetDdlRules, resetBodyRules,
       // New redesign state
       showRulesMenu, refCollapsed, ruleSearchQuery, ruleFilterDir,
       ddlRuleTab, bodyRuleTab, DDL_CATS_ALL, BODY_CATS_ALL,
