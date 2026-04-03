@@ -273,24 +273,24 @@ textarea::placeholder{color:var(--text-muted)}
         <div class="sidebar-logo">SQL</div>
         <span class="sidebar-title">SQL &#24037;&#20316;&#21488;</span>
       </div>
-      <nav class="sidebar-nav">
-        <div class="nav-item" role="tab" tabindex="0" :class="{active: activePage==='ddl'}" @click="activePage='ddl';sidebarOpen=false">
+      <nav class="sidebar-nav" aria-label="主导航">
+        <div class="nav-item" role="button" tabindex="0" :aria-pressed="activePage==='ddl'" :class="{active: activePage==='ddl'}" @click="activePage='ddl';sidebarOpen=false" @keydown.enter="activePage='ddl';sidebarOpen=false" @keydown.space.prevent="activePage='ddl';sidebarOpen=false">
           <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="1" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="9" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></span>
           DDL &#35821;&#21477;
         </div>
-        <div class="nav-item" role="tab" tabindex="0" :class="{active: activePage==='func'}" @click="activePage='func';sidebarOpen=false">
+        <div class="nav-item" role="button" tabindex="0" :aria-pressed="activePage==='func'" :class="{active: activePage==='func'}" @click="activePage='func';sidebarOpen=false" @keydown.enter="activePage='func';sidebarOpen=false" @keydown.space.prevent="activePage='func';sidebarOpen=false">
           <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3C3 2 4 1 5.5 1C7 1 8 2 8 3C8 5 5 5 5 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 8h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 8c0 3 3 3 3 5c0 1-1 2-2.5 2S3 14 3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="5" r="1" fill="currentColor"/><path d="M10 9l2-2 2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
           &#20989;&#25968;
         </div>
-        <div class="nav-item" role="tab" tabindex="0" :class="{active: activePage==='proc'}" @click="activePage='proc';sidebarOpen=false">
+        <div class="nav-item" role="button" tabindex="0" :aria-pressed="activePage==='proc'" :class="{active: activePage==='proc'}" @click="activePage='proc';sidebarOpen=false" @keydown.enter="activePage='proc';sidebarOpen=false" @keydown.space.prevent="activePage='proc';sidebarOpen=false">
           <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="10" y="2" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="10" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 6v2h4.5M12.5 6v2h-4.5M8 8v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
           &#23384;&#20648;&#36807;&#31243;
         </div>
-        <div class="nav-item" role="tab" tabindex="0" :class="{active: activePage==='rules'}" @click="activePage='rules';sidebarOpen=false">
+        <div class="nav-item" role="button" tabindex="0" :aria-pressed="activePage==='rules'" :class="{active: activePage==='rules'}" @click="activePage='rules';sidebarOpen=false" @keydown.enter="activePage='rules';sidebarOpen=false" @keydown.space.prevent="activePage='rules';sidebarOpen=false">
           <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M2 6.5h12M2 10h12M2 13.5h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="5" cy="3" r="1.2" fill="currentColor"/><circle cx="11" cy="6.5" r="1.2" fill="currentColor"/><circle cx="7" cy="10" r="1.2" fill="currentColor"/><circle cx="9" cy="13.5" r="1.2" fill="currentColor"/></svg></span>
           DDL &#26144;&#23556;&#35268;&#21017;
         </div>
-        <div class="nav-item" role="tab" tabindex="0" :class="{active: activePage==='bodyRules'}" @click="activePage='bodyRules';sidebarOpen=false">
+        <div class="nav-item" role="button" tabindex="0" :aria-pressed="activePage==='bodyRules'" :class="{active: activePage==='bodyRules'}" @click="activePage='bodyRules';sidebarOpen=false" @keydown.enter="activePage='bodyRules';sidebarOpen=false" @keydown.space.prevent="activePage='bodyRules';sidebarOpen=false">
           <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 2h5v5H2z" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M9 2h5v5H9z" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5.5 9.5h5v5h-5z" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M4.5 7v1.5h3.5M11.5 7v1.5h-3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M8 8.5v1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>
           &#31243;&#24207;&#22359;&#26144;&#23556;&#35268;&#21017;
         </div>
