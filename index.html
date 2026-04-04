@@ -412,6 +412,19 @@ body.splash-active{overflow:hidden}
 @keyframes spFadeUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
 @media(max-width:640px){.sp-triad{gap:16px}.sp-db-icon{width:44px;height:44px;font-size:11px;border-radius:10px}.sp-features{gap:10px}.sp-feat{padding:6px 14px;font-size:12px}.sp-cta{padding:14px 36px;font-size:15px}}
 
+/* ====== Reduced Motion ====== */
+@media(prefers-reduced-motion:reduce){
+#splash-poster{transition:opacity .2s ease}
+#splash-poster.leaving{transform:none;opacity:0}
+.sp-badge,.sp-title,.sp-sub,.sp-triad,.sp-features,.sp-cta,.sp-scroll{animation:none;opacity:1;transform:none}
+.sp-tok{animation:none;display:none}
+.sp-scroll-line{animation:none;opacity:.6;transform:none}
+.sp-cta:hover{transform:none}
+.settings-menu{animation:none}
+.rule-modal-mask{animation:none}
+.rule-modal{animation:none}
+}
+
 </style>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"WebApplication","name":"SQL 翻译工作台","url":"https://gitzhengpeng.github.io/oracle-java-workbench/","description":"Oracle / MySQL / PostgreSQL SQL 翻译工作台 — DDL建表语句、函数、存储过程在线互转","applicationCategory":"DeveloperApplication","operatingSystem":"Web","offers":{"@type":"Offer","price":"0","priceCurrency":"CNY"}}
