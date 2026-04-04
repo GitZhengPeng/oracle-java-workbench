@@ -2077,7 +2077,7 @@ const app = createApp({
       sidebarCollapsed.value = !sidebarCollapsed.value;
       localStorage.setItem('sidebarCollapsed', sidebarCollapsed.value ? '1' : '0');
     }
-    const NAV_PAGES = ['ddl', 'func', 'proc', 'rules', 'bodyRules'];
+    const NAV_PAGES = ['ddl', 'func', 'proc'];
     function setPage(page) {
       activePage.value = page;
       sidebarOpen.value = false;
