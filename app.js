@@ -1122,17 +1122,25 @@ function convertDDL(input, sourceDb, targetDb) {
 var _STORAGE_KEY_DDL  = 'ojw_ddlRules';
 var _STORAGE_KEY_BODY = 'ojw_bodyRules';
 
+var _persistError = '';
 function _saveDdlRulesToStorage() {
-  try { localStorage.setItem(_STORAGE_KEY_DDL, JSON.stringify(_ddlRulesData)); } catch(e) {}
+  try { localStorage.setItem(_STORAGE_KEY_DDL, JSON.stringify(_ddlRulesData)); return true; }
+  catch(e) { _persistError = e.message || '未知错误'; return false; }
 }
 function _saveBodyRulesToStorage() {
   var out = {};
   for (var k in _bodyRulesData) {
     out[k] = _bodyRulesData[k].map(function(r) { return { s: r.s, t: r.t }; });
   }
-  try { localStorage.setItem(_STORAGE_KEY_BODY, JSON.stringify(out)); } catch(e) {}
+  try { localStorage.setItem(_STORAGE_KEY_BODY, JSON.stringify(out)); return true; }
+  catch(e) { _persistError = e.message || '未知错误'; return false; }
 }
-function _persistRules() { _saveDdlRulesToStorage(); _saveBodyRulesToStorage(); }
+function _persistRules() {
+  _persistError = '';
+  var a = _saveDdlRulesToStorage();
+  var b = _saveBodyRulesToStorage();
+  return a && b;
+}
 
 function _loadDdlRulesFromStorage() {
   try {
@@ -2160,6 +2168,18 @@ const app = createApp({
     const procOutput = ref('');
 
     const statusText = ref('');
+    var _persistWarnShown = false;
+    function _doPersist() {
+      if (!_persistRules()) {
+        var msg = '⚠ 规则未能持久化（' + _persistError + '），当前修改仅在本次会话有效';
+        if (statusText.value) statusText.value += '  ' + msg;
+        else statusText.value = msg;
+        if (!_persistWarnShown) {
+          _persistWarnShown = true;
+          alert('注意：规则保存到本地存储失败（' + _persistError + '）。\n可能原因：隐私/无痕模式、存储空间已满。\n当前修改仅在本次会话内有效，关闭页面后将丢失。');
+        }
+      }
+    }
     const fileInput = ref(null);
     const fileEncoding = ref('auto');
     const ENCODING_OPTIONS = [
@@ -2217,7 +2237,7 @@ const app = createApp({
       }
       canUndoRule.value = _ruleUndoStack.length > 0;
       statusText.value = '已撤销上一步规则操作';
-      _persistRules();
+      _doPersist();
     }
 
     function resetDdlRules() {
@@ -2228,7 +2248,7 @@ const app = createApp({
       ddlRules.value = _ddlRulesData;
       triggerRef(ddlRules);
       statusText.value = 'DDL 映射规则已重置为默认';
-      _persistRules();
+      _doPersist();
     }
 
     function resetBodyRules() {
@@ -2239,22 +2259,23 @@ const app = createApp({
       _bodyRulesRef.value = _bodyRulesData;
       triggerRef(_bodyRulesRef);
       statusText.value = '程序块映射规则已重置为默认';
-      _persistRules();
+      _doPersist();
     }
 
     function addRule(category) {
       _pushUndo('ddl');
       ddlRules.value[category].unshift({source:'',target:''});
-      _persistRules();
+      _doPersist();
     }
     function deleteRule(category, index) {
       _pushUndo('ddl');
       ddlRules.value[category].splice(index, 1);
-      _persistRules();
+      _doPersist();
     }
     function saveRule(category, index) {
-      _persistRules();
-      statusText.value = '规则已保存: ' + ddlRules.value[category][index].source + ' → ' + ddlRules.value[category][index].target;
+      var desc = ddlRules.value[category][index].source + ' → ' + ddlRules.value[category][index].target;
+      statusText.value = '规则已保存: ' + desc;
+      _doPersist();
     }
 
     // --- Body (Function/Procedure) Rules state (reactive wrapper, shared with engine) ---
@@ -2279,21 +2300,21 @@ const app = createApp({
       var info = _bodyDirInfo(category);
       if (!info) return;
       _bodyRulesRef.value[info.pair].unshift({s:'', t:'', fwd:null, rev:null});
-      _persistRules();
+      _doPersist();
     }
     function deleteBodyRule(category, index) {
       _pushUndo('body');
       var info = _bodyDirInfo(category);
       if (!info) return;
       _bodyRulesRef.value[info.pair].splice(index, 1);
-      _persistRules();
+      _doPersist();
     }
     function saveBodyRule(category, index) {
       var info = _bodyDirInfo(category);
       if (!info) return;
       var r = _bodyRulesRef.value[info.pair][index];
-      _persistRules();
       statusText.value = '规则已保存: ' + r.s + ' → ' + r.t;
+      _doPersist();
     }
 
     // --- Rule Modal state ---
@@ -2431,7 +2452,7 @@ const app = createApp({
         }
       }
       ruleModal.value.visible = false;
-      _persistRules();
+      _doPersist();
     }
     const outputStatus = computed(() => {
       var output = '';
