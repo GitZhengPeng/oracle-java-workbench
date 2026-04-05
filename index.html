@@ -560,13 +560,13 @@ $$;</pre>
 
       <!-- ==================== CUSTOM ALERT MODAL ==================== -->
       <div class="rule-modal-mask" v-if="alertModal.visible" @click.self="alertModal.visible=false">
-        <div class="rule-modal u-modal-w340" ref="alertModalRef" :style="alertModal.dragStyle">
+        <div class="rule-modal u-modal-w340" ref="alertModalRef" :style="alertModal.dragStyle" role="alertdialog" aria-modal="true" aria-labelledby="alert-modal-title" aria-describedby="alert-modal-desc">
           <div class="rule-modal-head" @mousedown="startDrag($event, 'alert')">
-            <h4>{{alertModal.title}}</h4>
-            <button class="rule-modal-close" @click="alertModal.visible=false">&times;</button>
+            <h4 id="alert-modal-title">{{alertModal.title}}</h4>
+            <button class="rule-modal-close" @click="alertModal.visible=false" aria-label="关闭">&times;</button>
           </div>
           <div class="rule-modal-body u-modal-body-center">
-            <p>{{alertModal.message}}</p>
+            <p id="alert-modal-desc">{{alertModal.message}}</p>
           </div>
           <div class="rule-modal-foot u-modal-foot-center">
             <button class="btn-modal primary" @click="alertModal.visible=false">知道了</button>
@@ -576,13 +576,13 @@ $$;</pre>
 
       <!-- ==================== CONFIRM MODAL ==================== -->
       <div class="rule-modal-mask" v-if="confirmModal.visible" @click.self="confirmModalCancel">
-        <div class="rule-modal u-modal-w370" ref="confirmModalRef" :style="confirmModal.dragStyle">
+        <div class="rule-modal u-modal-w370" ref="confirmModalRef" :style="confirmModal.dragStyle" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-desc">
           <div class="rule-modal-head" @mousedown="startDrag($event, 'confirm')">
-            <h4>{{confirmModal.title}}</h4>
-            <button class="rule-modal-close" @click="confirmModalCancel">&times;</button>
+            <h4 id="confirm-modal-title">{{confirmModal.title}}</h4>
+            <button class="rule-modal-close" @click="confirmModalCancel" aria-label="关闭">&times;</button>
           </div>
           <div class="rule-modal-body u-modal-body-center">
-            <p>{{confirmModal.message}}</p>
+            <p id="confirm-modal-desc">{{confirmModal.message}}</p>
           </div>
           <div class="rule-modal-foot u-modal-foot-center-gap">
             <button class="btn-modal" @click="confirmModalCancel">取消</button>
@@ -593,19 +593,19 @@ $$;</pre>
 
       <!-- ==================== RULE EDIT MODAL ==================== -->
       <div class="rule-modal-mask" v-if="ruleModal.visible" @click.self="ruleModal.visible=false">
-        <div class="rule-modal" ref="ruleModalRef" :style="ruleModal.dragStyle">
+        <div class="rule-modal" ref="ruleModalRef" :style="ruleModal.dragStyle" role="dialog" aria-modal="true" aria-labelledby="rule-modal-title">
           <div class="rule-modal-head" @mousedown="startDrag($event, 'rule')">
-            <h4>{{ruleModal.index===-1 ? '新增规则' : '维护规则'}}</h4>
-            <button class="rule-modal-close" @click="ruleModal.visible=false">&times;</button>
+            <h4 id="rule-modal-title">{{ruleModal.index===-1 ? '新增规则' : '维护规则'}}</h4>
+            <button class="rule-modal-close" @click="ruleModal.visible=false" aria-label="关闭">&times;</button>
           </div>
           <div class="rule-modal-body">
             <div class="rule-modal-field">
-              <label>源语法 / 类型</label>
-              <input v-model="ruleModal.source" placeholder="请输入源语法或类型" @keyup.enter="confirmRuleModal"/>
+              <label for="rule-source-input">源语法 / 类型</label>
+              <input id="rule-source-input" v-model="ruleModal.source" placeholder="请输入源语法或类型" @keyup.enter="confirmRuleModal"/>
             </div>
             <div class="rule-modal-field">
-              <label>目标语法 / 类型</label>
-              <input v-model="ruleModal.target" placeholder="请输入目标语法或类型" @keyup.enter="confirmRuleModal"/>
+              <label for="rule-target-input">目标语法 / 类型</label>
+              <input id="rule-target-input" v-model="ruleModal.target" placeholder="请输入目标语法或类型" @keyup.enter="confirmRuleModal"/>
             </div>
             <div class="rule-modal-hint" v-if="ruleModal.index!==-1">提示: 两个输入框都清空后点击确定将删除该规则</div>
           </div>

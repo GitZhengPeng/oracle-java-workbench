@@ -2074,7 +2074,7 @@ function _genPGProcedure(name, params, vars, body) {
 }
 
 /* ===== VUE 3 APP ===== */
-const { createApp, ref, computed, onMounted, onUnmounted, triggerRef } = Vue;
+const { createApp, ref, computed, watch, nextTick, onMounted, onUnmounted, triggerRef } = Vue;
 
 const app = createApp({
   setup() {
@@ -2336,6 +2336,7 @@ const app = createApp({
     const confirmModalRef = ref(null);
 
     function _showConfirm(title, message) {
+      _modalTriggerEl = document.activeElement;
       return new Promise(resolve => {
         confirmModal.value = { visible: true, title, message, dragStyle: {}, _resolve: resolve };
       });
@@ -2350,6 +2351,7 @@ const app = createApp({
     }
 
     function _showAlert(title, message) {
+      _modalTriggerEl = document.activeElement;
       alertModal.value = { visible: true, title: title, message: message, dragStyle: {} };
     }
 
@@ -2376,7 +2378,79 @@ const app = createApp({
     }
     function _onDragEnd() { _dragState = null; }
 
+    /* ===== Modal Accessibility: Focus Trap, Escape, Auto-focus, Restore ===== */
+    var _modalTriggerEl = null; // element that opened the modal, for focus restore
+
+    var FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
+    function _trapFocus(e, modalRef) {
+      var el = modalRef.value;
+      if (!el) return;
+      var focusables = el.querySelectorAll(FOCUSABLE);
+      if (!focusables.length) return;
+      var first = focusables[0];
+      var last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
+    }
+
+    function _focusFirstIn(modalRef) {
+      nextTick(function() {
+        var el = modalRef.value;
+        if (!el) return;
+        var target = el.querySelector(FOCUSABLE);
+        if (target) target.focus();
+      });
+    }
+
+    function _restoreTriggerFocus() {
+      var el = _modalTriggerEl;
+      _modalTriggerEl = null;
+      if (el && typeof el.focus === 'function') {
+        nextTick(function() { el.focus(); });
+      }
+    }
+
+    // Watch modal visibility for auto-focus and focus restore
+    watch(function() { return alertModal.value.visible; }, function(visible) {
+      if (visible) {
+        // Focus the primary action button for alert
+        nextTick(function() {
+          var el = alertModalRef.value;
+          if (!el) return;
+          var btn = el.querySelector('.btn-modal.primary');
+          if (btn) btn.focus(); else _focusFirstIn(alertModalRef);
+        });
+      } else { _restoreTriggerFocus(); }
+    });
+    watch(function() { return confirmModal.value.visible; }, function(visible) {
+      if (visible) {
+        // Focus the primary action button for confirm
+        nextTick(function() {
+          var el = confirmModalRef.value;
+          if (!el) return;
+          var btn = el.querySelector('.btn-modal.primary');
+          if (btn) btn.focus(); else _focusFirstIn(confirmModalRef);
+        });
+      } else { _restoreTriggerFocus(); }
+    });
+    watch(function() { return ruleModal.value.visible; }, function(visible) {
+      if (visible) {
+        // Focus first input for better form UX
+        nextTick(function() {
+          var el = ruleModalRef.value;
+          if (!el) return;
+          var input = el.querySelector('input');
+          if (input) input.focus(); else _focusFirstIn(ruleModalRef);
+        });
+      } else { _restoreTriggerFocus(); }
+    });
+
     function openRuleModal(type, category, index) {
+      _modalTriggerEl = document.activeElement;
       ruleModal.value.type = type;
       ruleModal.value.category = category;
       ruleModal.value.index = index;
@@ -2839,6 +2913,20 @@ const app = createApp({
       };
       window.addEventListener('scroll', scrollHandler, { passive: true });
       keyHandler = (e) => {
+        /* --- Modal keyboard: Escape to close, Tab to trap focus --- */
+        if (ruleModal.value.visible) {
+          if (e.key === 'Escape') { e.preventDefault(); ruleModal.value.visible = false; return; }
+          if (e.key === 'Tab') { _trapFocus(e, ruleModalRef); return; }
+        }
+        if (confirmModal.value.visible) {
+          if (e.key === 'Escape') { e.preventDefault(); confirmModalCancel(); return; }
+          if (e.key === 'Tab') { _trapFocus(e, confirmModalRef); return; }
+        }
+        if (alertModal.value.visible) {
+          if (e.key === 'Escape') { e.preventDefault(); alertModal.value.visible = false; return; }
+          if (e.key === 'Tab') { _trapFocus(e, alertModalRef); return; }
+        }
+        /* --- Existing handlers --- */
         if (e.key === 'Escape' && showRulesMenu.value) {
           e.preventDefault();
           showRulesMenu.value = false;
