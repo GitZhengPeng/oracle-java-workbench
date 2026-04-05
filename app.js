@@ -2090,32 +2090,7 @@ const app = createApp({
       activePage.value = page;
       sidebarOpen.value = false;
     }
-    function navKeydown(e) {
-      var idx = NAV_PAGES.indexOf(activePage.value);
-      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-        e.preventDefault();
-        idx = (idx + 1) % NAV_PAGES.length;
-        setPage(NAV_PAGES[idx]);
-        var next = e.currentTarget.parentElement.querySelectorAll('[role=tab]')[idx];
-        if (next) next.focus();
-      } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-        e.preventDefault();
-        idx = (idx - 1 + NAV_PAGES.length) % NAV_PAGES.length;
-        setPage(NAV_PAGES[idx]);
-        var prev = e.currentTarget.parentElement.querySelectorAll('[role=tab]')[idx];
-        if (prev) prev.focus();
-      } else if (e.key === 'Home') {
-        e.preventDefault();
-        setPage(NAV_PAGES[0]);
-        var first = e.currentTarget.parentElement.querySelectorAll('[role=tab]')[0];
-        if (first) first.focus();
-      } else if (e.key === 'End') {
-        e.preventDefault();
-        setPage(NAV_PAGES[NAV_PAGES.length - 1]);
-        var last = e.currentTarget.parentElement.querySelectorAll('[role=tab]');
-        if (last.length) last[last.length - 1].focus();
-      }
-    }
+    /* navKeydown removed: sidebar is now role="navigation" with aria-current, not tablist */
     const showRulesMenu = ref(false);
 
     // Theme: 'system' | 'light' | 'dark'
@@ -2962,7 +2937,7 @@ const app = createApp({
     });
 
     return {
-      activePage, sidebarOpen, sidebarCollapsed, toggleSidebar, setPage, navKeydown,
+      activePage, sidebarOpen, sidebarCollapsed, toggleSidebar, setPage,
       // Theme
       themeMode, themeLabel, toggleTheme,
       // DDL

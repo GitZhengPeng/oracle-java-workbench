@@ -69,16 +69,16 @@
         <div class="sidebar-logo">SQL</div>
         <span class="sidebar-title">SQL &#24037;&#20316;&#21488;</span>
       </div>
-      <nav class="sidebar-nav" role="tablist" aria-label="主导航" aria-orientation="vertical">
-        <button class="nav-item" role="tab" :id="'tab-ddl'" :aria-selected="activePage==='ddl'" :tabindex="activePage==='ddl'?0:-1" aria-controls="panel-ddl" :class="{active: activePage==='ddl'}" @click="setPage('ddl')" @keydown="navKeydown">
+      <nav class="sidebar-nav" aria-label="主导航">
+        <button class="nav-item" :aria-current="activePage==='ddl'?'page':null" :class="{active: activePage==='ddl'}" @click="setPage('ddl')">
           <span class="nav-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="1" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="9" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></span>
           DDL &#35821;&#21477;
         </button>
-        <button class="nav-item" role="tab" :id="'tab-func'" :aria-selected="activePage==='func'" :tabindex="activePage==='func'?0:-1" aria-controls="panel-func" :class="{active: activePage==='func'}" @click="setPage('func')" @keydown="navKeydown">
+        <button class="nav-item" :aria-current="activePage==='func'?'page':null" :class="{active: activePage==='func'}" @click="setPage('func')">
           <span class="nav-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3C3 2 4 1 5.5 1C7 1 8 2 8 3C8 5 5 5 5 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 8h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 8c0 3 3 3 3 5c0 1-1 2-2.5 2S3 14 3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="5" r="1" fill="currentColor"/><path d="M10 9l2-2 2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
           &#20989;&#25968;
         </button>
-        <button class="nav-item" role="tab" :id="'tab-proc'" :aria-selected="activePage==='proc'" :tabindex="activePage==='proc'?0:-1" aria-controls="panel-proc" :class="{active: activePage==='proc'}" @click="setPage('proc')" @keydown="navKeydown">
+        <button class="nav-item" :aria-current="activePage==='proc'?'page':null" :class="{active: activePage==='proc'}" @click="setPage('proc')">
           <span class="nav-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="2" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="10" y="2" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="10" width="5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 6v2h4.5M12.5 6v2h-4.5M8 8v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
           &#23384;&#20648;&#36807;&#31243;
         </button>
@@ -126,7 +126,7 @@
 
       <!-- ==================== DDL PAGE ==================== -->
       <template v-if="activePage==='ddl'">
-        <section class="toolbar" id="panel-ddl" role="tabpanel" aria-labelledby="tab-ddl">
+        <section class="toolbar" id="panel-ddl" role="region" aria-label="DDL 语句翻译">
           <div class="tool-left">
             <span class="tool-label">&#36716;&#25442;&#26041;&#21521;</span>
             <select class="db-select" v-model="sourceDb" aria-label="源数据库">
@@ -236,7 +236,7 @@
 
       <!-- ==================== FUNCTION PAGE ==================== -->
       <template v-if="activePage==='func'">
-        <section class="toolbar" id="panel-func" role="tabpanel" aria-labelledby="tab-func">
+        <section class="toolbar" id="panel-func" role="region" aria-label="函数翻译">
           <div class="tool-left">
             <span class="tool-label">&#36716;&#25442;&#26041;&#21521;</span>
             <select class="db-select" v-model="funcSourceDb" aria-label="源数据库">
@@ -357,7 +357,7 @@ $$;</pre>
 
       <!-- ==================== PROCEDURE PAGE ==================== -->
       <template v-if="activePage==='proc'">
-        <section class="toolbar" id="panel-proc" role="tabpanel" aria-labelledby="tab-proc">
+        <section class="toolbar" id="panel-proc" role="region" aria-label="存储过程翻译">
           <div class="tool-left">
             <span class="tool-label">&#36716;&#25442;&#26041;&#21521;</span>
             <select class="db-select" v-model="procSourceDb" aria-label="源数据库">
