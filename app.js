@@ -1561,6 +1561,28 @@ function _convertSingleFunction(input, sourceDb, targetDb) {
     transformedBody = _rowtypeResult.body;
   }
 
+  // Fix PG RECORD -> Oracle cursor%ROWTYPE (function variant)
+  if (targetDb === 'oracle' && (sourceDb === 'postgresql' || sourceDb === 'mysql')) {
+    var _cursorNamesF = [];
+    for (var ri = 0; ri < mappedVars.length; ri++) {
+      if (mappedVars[ri].cursor) _cursorNamesF.push(mappedVars[ri].name);
+    }
+    if (_cursorNamesF.length > 0) {
+      for (var ri2 = 0; ri2 < mappedVars.length; ri2++) {
+        var rv = mappedVars[ri2];
+        if (rv.type && /\bRECORD\b/i.test(rv.type)) {
+          var fetchRe = new RegExp('\\bFETCH\\s+(\\w+)\\s+INTO\\s+' + rv.name + '\\b', 'i');
+          var fm = transformedBody.match(fetchRe);
+          if (fm && _cursorNamesF.indexOf(fm[1]) >= 0) {
+            mappedVars[ri2] = { name: rv.name, type: fm[1] + '%ROWTYPE', defaultVal: rv.defaultVal };
+          } else if (_cursorNamesF.length === 1) {
+            mappedVars[ri2] = { name: rv.name, type: _cursorNamesF[0] + '%ROWTYPE', defaultVal: rv.defaultVal };
+          }
+        }
+      }
+    }
+  }
+
   if (targetDb === 'oracle') return _genOracleFunction(parsed.name, mappedParams, mappedReturnType, mappedVars, transformedBody);
   if (targetDb === 'mysql') return _genMySQLFunction(parsed.name, mappedParams, mappedReturnType, mappedVars, transformedBody);
   return _genPGFunction(parsed.name, mappedParams, mappedReturnType, mappedVars, transformedBody);
@@ -1687,8 +1709,8 @@ function _parsePGFunction(input) {
   }
   const returnType = rm[1];
   const afterHeader = afterParams.substring(rm[0].length);
-  let inner = afterHeader.replace(/\$\$\s*;?\s*$/g, '').replace(/\bLANGUAGE\s+\w+\s*;?\s*$/gi, '').trim();
-  inner = inner.replace(/\$\$\s*LANGUAGE\s+\w+\s*;?\s*$/gi, '').trim();
+  let inner = afterHeader.replace(/\$\$\s*;?\s*$/g, '').replace(/\bLANGUAGE\s+\w+\s*;?\s*$/gi, '').replace(/\$\$\s*;?\s*$/g, '').trim();
+  inner = inner.replace(/\$\$\s*LANGUAGE\s+\w+\s*;?\s*$/gi, '').replace(/\$\$\s*;?\s*$/g, '').trim();
   const vars = [];
   const declareMatch = inner.match(/\bDECLARE\b([\s\S]*?)\bBEGIN\b/i);
   if (declareMatch) {
@@ -1719,7 +1741,10 @@ function _genOracleFunction(name, params, returnType, vars, body) {
   const pLines = params.map(function(p) {
     let line = '  ' + p.name;
     line += ' ' + (p.direction || 'IN');
-    line += ' ' + p.type;
+    /* Oracle formal params: strip size from VARCHAR2/CHAR/NVARCHAR2/RAW */
+    var ptype = p.type;
+    ptype = ptype.replace(/\b(VARCHAR2|VARCHAR|NVARCHAR2|CHAR|NCHAR|RAW)\s*\(\s*\d+\s*(?:\s+(?:BYTE|CHAR))?\s*\)/gi, '$1');
+    line += ' ' + ptype;
     if (p.defaultVal) line += ' DEFAULT ' + p.defaultVal;
     return line;
   });
@@ -1736,9 +1761,10 @@ function _genOracleFunction(name, params, returnType, vars, body) {
   // Remove any leading BEGIN if body already has it
   cleanBody = cleanBody.replace(/^\s*BEGIN\b/i, '');
   out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
-  // Ensure proper END
-  if (!/\bEND\b/i.test(out.split('BEGIN').pop())) out += 'END;\n';
-  else out = out.replace(/\bEND\b\s*\w*\s*;?\s*$/i, 'END;\n');
+  // Ensure proper END — only match standalone END; (not END IF/LOOP/CASE)
+  var afterBeginF = out.split('BEGIN').pop();
+  if (!/^\s*END\s*;\s*$/im.test(afterBeginF)) out += 'END;\n';
+  else out = out.replace(/\bEND\b\s*;?\s*$/i, 'END;\n');
   out += '/';
   return out;
 }
@@ -2025,6 +2051,30 @@ function _convertSingleProcedure(input, sourceDb, targetDb) {
     transformedBody = _rowtypeResult.body;
   }
 
+  // Fix PG RECORD -> Oracle cursor%ROWTYPE: match RECORD vars to cursors via FETCH patterns
+  if (targetDb === 'oracle' && (sourceDb === 'postgresql' || sourceDb === 'mysql')) {
+    var _cursorNames = [];
+    for (var ri = 0; ri < mappedVars.length; ri++) {
+      if (mappedVars[ri].cursor) _cursorNames.push(mappedVars[ri].name);
+    }
+    if (_cursorNames.length > 0) {
+      for (var ri2 = 0; ri2 < mappedVars.length; ri2++) {
+        var rv = mappedVars[ri2];
+        if (rv.type && /\bRECORD\b/i.test(rv.type)) {
+          /* Find FETCH cursor_name INTO this_var in body to determine associated cursor */
+          var fetchRe = new RegExp('\\bFETCH\\s+(\\w+)\\s+INTO\\s+' + rv.name + '\\b', 'i');
+          var fm = transformedBody.match(fetchRe);
+          if (fm && _cursorNames.indexOf(fm[1]) >= 0) {
+            mappedVars[ri2] = { name: rv.name, type: fm[1] + '%ROWTYPE', defaultVal: rv.defaultVal };
+          } else if (_cursorNames.length === 1) {
+            /* Only one cursor declared — safe to assume */
+            mappedVars[ri2] = { name: rv.name, type: _cursorNames[0] + '%ROWTYPE', defaultVal: rv.defaultVal };
+          }
+        }
+      }
+    }
+  }
+
   // Fix BOOLEAN 0/1 -> FALSE/TRUE when targeting PostgreSQL (or Oracle)
   if (targetDb === 'postgresql' || targetDb === 'oracle') {
     var _boolVarNames = [];
@@ -2162,8 +2212,8 @@ function _parsePGProcedure(input) {
     if (!am) throw new Error('无法解析PostgreSQL存储过程头 AS $$');
   }
   const afterHeader = afterParams.substring(am[0].length);
-  let inner = afterHeader.replace(/\$\$\s*;?\s*$/g, '').replace(/\bLANGUAGE\s+\w+\s*;?\s*$/gi, '').trim();
-  inner = inner.replace(/\$\$\s*LANGUAGE\s+\w+\s*;?\s*$/gi, '').trim();
+  let inner = afterHeader.replace(/\$\$\s*;?\s*$/g, '').replace(/\bLANGUAGE\s+\w+\s*;?\s*$/gi, '').replace(/\$\$\s*;?\s*$/g, '').trim();
+  inner = inner.replace(/\$\$\s*LANGUAGE\s+\w+\s*;?\s*$/gi, '').replace(/\$\$\s*;?\s*$/g, '').trim();
   const vars = [];
   const declareMatch = inner.match(/\bDECLARE\b([\s\S]*?)\bBEGIN\b/i);
   if (declareMatch) {
@@ -2196,7 +2246,10 @@ function _genOracleProcedure(name, params, vars, body) {
     const pLines = params.map(function(p) {
       let line = '  ' + p.name;
       line += ' ' + (p.direction || 'IN');
-      line += ' ' + p.type;
+      /* Oracle formal params: strip size from VARCHAR2/CHAR/NVARCHAR2/RAW */
+      var ptype = p.type;
+      ptype = ptype.replace(/\b(VARCHAR2|VARCHAR|NVARCHAR2|CHAR|NCHAR|RAW)\s*\(\s*\d+\s*(?:\s+(?:BYTE|CHAR))?\s*\)/gi, '$1');
+      line += ' ' + ptype;
       if (p.defaultVal) line += ' DEFAULT ' + p.defaultVal;
       return line;
     });
@@ -2231,9 +2284,9 @@ function _genOracleProcedure(name, params, vars, body) {
     out += '  CURSOR ' + cursorExtracted[ci].name + ' IS ' + cursorExtracted[ci].query + ';\n';
   }
   out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
-  /* Fix #8: Robust END; detection — must be standalone END (not END IF/LOOP/WHILE) */
+  /* Fix #8: Robust END; detection — only match standalone END; (not END IF/LOOP/CASE) */
   var afterBegin = out.substring(out.lastIndexOf('BEGIN'));
-  var hasEnd = /^\s*END\s*(?:\w+\s*)?;?\s*$/im.test(afterBegin) && /^\s*END\s*;/im.test(afterBegin);
+  var hasEnd = /^\s*END\s*;\s*$/im.test(afterBegin);
   if (!hasEnd) {
     /* Strip trailing whitespace before adding END; */
     out = out.replace(/\s*$/, '\n');

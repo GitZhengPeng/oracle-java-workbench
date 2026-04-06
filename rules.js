@@ -952,8 +952,13 @@ var _handleSqlRowcountOracleToPg = function(b) {
 
 var _handlePgNotFoundToOracle = function(b) {
   return b.replace(/\bNOT\s+FOUND\b(?!\s+handler)/gi, function(m, offset) {
-    var before = b.substring(Math.max(0, offset - 30), offset);
-    if (/EXIT\s+WHEN\s*$/i.test(before) || /WHEN\s*$/i.test(before)) return 'C1%NOTFOUND';
+    var before = b.substring(0, offset);
+    if (/EXIT\s+WHEN\s*$/i.test(before) || /(?:^|\n)\s*WHEN\s*$/i.test(before)) {
+      /* Scan backwards for nearest FETCH cursor_name or OPEN cursor_name to resolve actual cursor */
+      var fetchMatch = before.match(/\b(?:FETCH|OPEN)\s+(\w+)\b(?!.*\b(?:FETCH|OPEN)\s+\w+\b)/si);
+      var cursorName = fetchMatch ? fetchMatch[1] : 'C1';
+      return cursorName + '%NOTFOUND';
+    }
     return m;
   });
 };
@@ -1271,7 +1276,7 @@ var _bodyRulesData = {
     /* || concat (stays the same for Oracle<->PG) */
     {s:'|| \u5b57\u7b26\u4e32\u62fc\u63a5',t:'|| \u4fdd\u6301\u4e0d\u53d8', fwd: null, rev: null},
     /* DBMS_OUTPUT.PUT_LINE */
-    {s:'DBMS_OUTPUT.PUT_LINE(expr)',t:"RAISE NOTICE '%', expr", fwd: function(b) { return b.replace(/\bDBMS_OUTPUT\.PUT_LINE\s*\(\s*([^;]+)\)\s*;/gi, "RAISE NOTICE '%', $1;"); }, rev: function(b) { b = b.replace(/\bRAISE\s+NOTICE\s+'([^']*)',\s*([^;]+);/gi, 'DBMS_OUTPUT.PUT_LINE($2);'); b = b.replace(/\bRAISE\s+NOTICE\s+'([^']*)'\s*;/gi, "DBMS_OUTPUT.PUT_LINE('$1');"); return b; }},
+    {s:'DBMS_OUTPUT.PUT_LINE(expr)',t:"RAISE NOTICE '%', expr", fwd: function(b) { return b.replace(/\bDBMS_OUTPUT\.PUT_LINE\s*\(\s*([^;]+)\)\s*;/gi, "RAISE NOTICE '%', $1;"); }, rev: function(b) { b = b.replace(/\bRAISE\s+NOTICE\s+'([^']*)',\s*([^;]+);/gi, function(m, fmt, args) { var parts = args.split(/\s*,\s*/); if (parts.length > 1) return 'DBMS_OUTPUT.PUT_LINE(' + parts.join(" || ' ' || ") + ');'; return 'DBMS_OUTPUT.PUT_LINE(' + args.trim() + ');'; }); b = b.replace(/\bRAISE\s+NOTICE\s+'([^']*)'\s*;/gi, "DBMS_OUTPUT.PUT_LINE('$1');"); return b; }},
     /* EXCEPTION handling (Oracle/PG keep mostly, but conversion to MySQL is separate) */
     {s:'EXCEPTION WHEN OTHERS THEN',t:'EXCEPTION WHEN OTHERS THEN \u4fdd\u6301', fwd: null, rev: null},
     /* ROWNUM -> LIMIT */
@@ -1330,11 +1335,12 @@ var _bodyRulesData = {
     {s:'cursor%NOTFOUND',t:'NOT FOUND', fwd: function(b) { return _handleOracleCursorAttrsToPg(b); }, rev: _handlePgNotFoundToOracle},
     {s:'cursor%FOUND',t:'FOUND', fwd: null, rev: null},
     {s:'cursor%ROWTYPE',t:'RECORD', fwd: null, rev: null},
+    /* RECORD -> cursor%ROWTYPE (PG->Oracle): handled in app.js _convertSingleProcedure */
     {s:'cursor%ISOPEN',t:'(PG \u65e0\u76f4\u63a5\u7b49\u4ef7, \u7528 BEGIN CLOSE; EXCEPTION END)', fwd: null, rev: null},
     /* CURSOR declaration */
     {s:'CURSOR c IS SELECT ...',t:'c CURSOR FOR SELECT ...', fwd: function(b) { return b.replace(/\bCURSOR\s+(\w+)\s+IS\b/gi, '$1 CURSOR FOR'); }, rev: function(b) { return b.replace(/\b(\w+)\s+CURSOR\s+FOR\b/gi, 'CURSOR $1 IS'); }},
     /* FOR r IN (SELECT...) LOOP */
-    {s:'FOR r IN (SELECT...) LOOP',t:'FOR r IN SELECT... LOOP', fwd: function(b) { return b.replace(/(^|\n)(\s*)FOR\s+(\w+)\s+IN\s*\(([\s\S]*?)\)\s*LOOP\b/gi, '$1$2FOR $3 IN $4 LOOP'); }, rev: null},
+    {s:'FOR r IN (SELECT...) LOOP',t:'FOR r IN SELECT... LOOP', fwd: function(b) { return b.replace(/(^|\n)(\s*)FOR\s+(\w+)\s+IN\s*\(([\s\S]*?)\)\s*LOOP\b/gi, '$1$2FOR $3 IN $4 LOOP'); }, rev: function(b) { return b.replace(/(^|\n)(\s*)FOR\s+(\w+)\s+IN\s+(SELECT\b[\s\S]*?)\s*LOOP\b/gi, '$1$2FOR $3 IN ($4) LOOP'); }},
     /* REGEXP_LIKE */
     {s:'REGEXP_LIKE(expr, pat)',t:'expr ~ pat', fwd: function(b) { return b.replace(/\bREGEXP_LIKE\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+),\s*([^)]+)\)/gi, '$1 ~ $2'); }, rev: function(b) { return b.replace(/\b(\S+)\s+~\s+('(?:[^']*)'|\S+)/gi, function(m, expr, pat) { return 'REGEXP_LIKE(' + expr + ', ' + pat + ')'; }); }},
     /* SQLCODE -> SQLSTATE */
@@ -1342,7 +1348,7 @@ var _bodyRulesData = {
     /* DBMS_UTILITY.FORMAT_ERROR_BACKTRACE */
     {s:'DBMS_UTILITY.FORMAT_ERROR_BACKTRACE',t:'PG_EXCEPTION_CONTEXT', fwd: _rk('DBMS_UTILITY.FORMAT_ERROR_BACKTRACE','PG_EXCEPTION_CONTEXT'), rev: null},
     /* PG ::TYPE cast (reverse PG->Oracle) */
-    {s:'expr::TEXT',t:'TO_CHAR(expr)', fwd: null, rev: function(b) { b = b.replace(/(\w+)::TEXT\b/gi, function(m, v) { return 'TO_CHAR(' + v + ')'; }); b = b.replace(/(\w+)::NUMERIC\b/gi, function(m, v) { return 'TO_NUMBER(' + v + ')'; }); b = b.replace(/(\w+)::DATE\b/gi, function(m, v) { return 'TRUNC(' + v + ')'; }); return b; }},
+    {s:'expr::TEXT',t:'TO_CHAR(expr)', fwd: null, rev: function(b) { b = b.replace(/(\w+)::TEXT\b/gi, function(m, v) { return 'TO_CHAR(' + v + ')'; }); b = b.replace(/(\w+)::NUMERIC\b/gi, function(m, v) { return 'TO_NUMBER(' + v + ')'; }); b = b.replace(/(\w+)::DATE\b/gi, function(m, v) { return 'CAST(' + v + ' AS DATE)'; }); return b; }},
     /* INITCAP (PG supports natively) */
     {s:'INITCAP(x)',t:'INITCAP(x) (PG \u539f\u751f\u652f\u6301)', fwd: null, rev: null},
     /* VARCHAR2 in body */
@@ -1356,6 +1362,8 @@ var _bodyRulesData = {
     {s:'BLOB',t:'BYTEA', fwd: null, rev: null, typeFwd: _typeReplace(/\bBLOB\b/gi, 'BYTEA'), typeRev: _typeReplace(/\bBYTEA\b/gi, 'BLOB')},
     {s:'PLS_INTEGER / BINARY_INTEGER',t:'INTEGER', fwd: null, rev: null, typeFwd: _typeChain(_typeReplace(/\bPLS_INTEGER\b/gi, 'INTEGER'), _typeReplace(/\bBINARY_INTEGER\b/gi, 'INTEGER')), typeRev: null},
     {s:'BOOLEAN',t:'BOOLEAN', fwd: null, rev: null, typeFwd: _typeReplace(/\bBOOLEAN\b/gi, 'BOOLEAN'), typeRev: _typeReplace(/\bBOOLEAN\b/gi, 'NUMBER(1)')},
+    /* Boolean literals TRUE/FALSE -> 1/0 in Oracle DML (UPDATE SET, INSERT VALUES, WHERE) */
+    {s:'TRUE/FALSE (DML)',t:'1/0', fwd: null, rev: function(b) { b = b.replace(/(\bSET\s+\w+\s*=\s*)TRUE\b/gi, '$1' + '1'); b = b.replace(/(\bSET\s+\w+\s*=\s*)FALSE\b/gi, '$1' + '0'); b = b.replace(/(\bWHERE\s+[\s\S]*?=\s*)TRUE\b/gi, '$1' + '1'); b = b.replace(/(\bWHERE\s+[\s\S]*?=\s*)FALSE\b/gi, '$1' + '0'); return b; }},
     {s:'VARCHAR2 type',t:'VARCHAR type', fwd: null, rev: null, typeFwd: _typeChain(_typeReplace(/\bVARCHAR2\s*\(([^)]+)\)/gi, 'VARCHAR($1)'), _typeReplace(/\bVARCHAR2\b/gi, 'VARCHAR'), _typeReplace(/\bNVARCHAR2\s*\(([^)]+)\)/gi, 'VARCHAR($1)')), typeRev: _typeChain(_typeReplace(/\bVARCHAR\b(?!\s*\()/gi, 'VARCHAR2(4000)'), _typeReplace(/\bVARCHAR\s*\(([^)]+)\)/gi, 'VARCHAR2($1)'))},
     {s:'DATE',t:'TIMESTAMP', fwd: null, rev: null, typeFwd: _typeChain(_typeReplace(/\bDATE\b/gi, 'TIMESTAMP'), _typeReplace(/\bTIMESTAMP\b/gi, 'TIMESTAMP')), typeRev: null},
     {s:'REAL',t:'DOUBLE PRECISION', fwd: null, rev: null, typeFwd: _typeReplace(/\bREAL\b/gi, 'DOUBLE PRECISION'), typeRev: null},
