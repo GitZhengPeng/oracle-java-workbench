@@ -2193,11 +2193,34 @@ function _genOracleProcedure(name, params, vars, body) {
     if (v.defaultVal) out += ' := ' + v.defaultVal;
     out += ';\n';
   }
+  /* Fix #1: Extract cursor declarations from body (MySQL DECLARE CURSOR FOR -> Oracle IS section) */
   let cleanBody = body.replace(/^\s*\n/, '\n').replace(/\s+$/, '');
   cleanBody = cleanBody.replace(/^\s*BEGIN\b/i, '');
+  var cursorExtracted = [];
+  cleanBody = cleanBody.replace(/(^|\n)\s*CURSOR\s+(\w+)\s+IS\s+([\s\S]*?)\s*;/gi, function(m, pre, curName, curQuery) {
+    cursorExtracted.push({ name: curName, query: curQuery.trim() });
+    return pre;
+  });
+  /* Also extract MySQL-syntax cursor declarations left in body */
+  cleanBody = cleanBody.replace(/(^|\n)\s*DECLARE\s+(\w+)\s+CURSOR\s+FOR\s+([\s\S]*?)\s*;/gi, function(m, pre, curName, curQuery) {
+    cursorExtracted.push({ name: curName, query: curQuery.trim() });
+    return pre;
+  });
+  /* Append extracted cursors to IS section (before BEGIN) */
+  for (var ci = 0; ci < cursorExtracted.length; ci++) {
+    out += '  CURSOR ' + cursorExtracted[ci].name + ' IS ' + cursorExtracted[ci].query + ';\n';
+  }
   out += 'BEGIN\n' + cleanBody.replace(/^\n+/,'') + '\n';
-  if (!/\bEND\b/i.test(out.split('BEGIN').pop())) out += 'END;\n';
-  else out = out.replace(/\bEND\b\s*\w*\s*;?\s*$/i, 'END;\n');
+  /* Fix #8: Robust END; detection — must be standalone END (not END IF/LOOP/WHILE) */
+  var afterBegin = out.substring(out.lastIndexOf('BEGIN'));
+  var hasEnd = /^\s*END\s*(?:\w+\s*)?;?\s*$/im.test(afterBegin) && /^\s*END\s*;/im.test(afterBegin);
+  if (!hasEnd) {
+    /* Strip trailing whitespace before adding END; */
+    out = out.replace(/\s*$/, '\n');
+    out += 'END;\n';
+  } else {
+    out = out.replace(/\bEND\s*;\s*$/i, 'END;\n');
+  }
   out += '/';
   return out;
 }

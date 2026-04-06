@@ -1168,8 +1168,12 @@ function _convertConcatToPipe(body) {
   // Replace CONCAT(a, b, ...) with (a || b || ...) handling nested parens
   let result = '', i = 0;
   while (i < body.length) {
-    // Look for CONCAT( keyword
+    // Look for CONCAT( keyword, but NOT GROUP_CONCAT (check preceding char)
     const concatMatch = body.substring(i).match(/^\bCONCAT\s*\(/i);
+    if (concatMatch && i > 0 && /\w/.test(body[i - 1])) {
+      // Preceded by word char (e.g. GROUP_CONCAT) — skip, not a standalone CONCAT
+      result += body[i]; i++; continue;
+    }
     if (concatMatch) {
       const start = i + concatMatch[0].length;
       // Find matching closing paren
@@ -1391,7 +1395,7 @@ var _bodyRulesData = {
     /* || -> CONCAT */
     {s:'|| \u5b57\u7b26\u4e32\u62fc\u63a5',t:'CONCAT(a, b, ...)', fwd: _handlePipeConcatToFunction, rev: function(b) { return _convertConcatToPipe(b); }},
     /* DBMS_OUTPUT.PUT_LINE -> SELECT */
-    {s:'DBMS_OUTPUT.PUT_LINE(expr)',t:'SELECT expr;', fwd: function(b) { return b.replace(/\bDBMS_OUTPUT\.PUT_LINE\s*\(\s*([^;]+)\)\s*;/gi, 'SELECT $1;'); }, rev: function(b) { return b.replace(/\bSELECT\s+(.+?)\s*;\s*(?=\n|$)/gi, function(m, expr) { if (/\b(INTO|FROM|WHERE)\b/i.test(expr)) return m; return 'DBMS_OUTPUT.PUT_LINE(' + expr.trim() + '); -- [\u6ce8\u610f: \u539f MySQL SELECT \u8f93\u51fa, \u82e5\u4e3a\u7ed3\u679c\u96c6\u8bf7\u6539\u7528 SYS_REFCURSOR]'; }); }},
+    {s:'DBMS_OUTPUT.PUT_LINE(expr)',t:'SELECT expr;', fwd: function(b) { return b.replace(/\bDBMS_OUTPUT\.PUT_LINE\s*\(\s*([^;]+)\)\s*;/gi, 'SELECT $1;'); }, rev: function(b) { return b.replace(/\bSELECT\s+(.+?)\s*;\s*(?=\n|$)/gi, function(m, expr) { if (/\b(INTO|FROM|WHERE)\b/i.test(expr)) return m; var cleanExpr = expr.trim().replace(/\s+AS\s+\w+\s*$/i, ''); return 'DBMS_OUTPUT.PUT_LINE(' + cleanExpr + '); -- [\u6ce8\u610f: \u539f MySQL SELECT \u8f93\u51fa, \u82e5\u4e3a\u7ed3\u679c\u96c6\u8bf7\u6539\u7528 SYS_REFCURSOR]'; }); }},
     /* EXCEPTION -> MySQL HANDLER */
     {s:'EXCEPTION WHEN OTHERS THEN ...',t:'DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN...END', fwd: _handleExceptionToMysqlHandler, rev: _handleMysqlHandlerToOracle},
     {s:'EXCEPTION WHEN NO_DATA_FOUND',t:'DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN...END', fwd: null, rev: null},
@@ -1411,11 +1415,28 @@ var _bodyRulesData = {
     {s:'ELSIF',t:'ELSEIF', fwd: function(b) { return b.replace(/\bELSIF\b/gi, 'ELSEIF'); }, rev: function(b) { return b.replace(/\bELSEIF\b/gi, 'ELSIF'); }},
     /* WHILE LOOP -> WHILE DO */
     {s:'WHILE ... LOOP / END LOOP',t:'WHILE ... DO / END WHILE', fwd: _handleWhileLoopToMysql, rev: _handleWhileDoToLoop},
-    {s:'LOOP / END LOOP \u57fa\u672c\u5faa\u73af',t:'label: LOOP / END LOOP label', fwd: null, rev: null},
+    {s:'LOOP / END LOOP \u57fa\u672c\u5faa\u73af',t:'label: LOOP / END LOOP label', fwd: null, rev: function(b) {
+      /* MySQL label: LOOP -> Oracle <<label>> LOOP */
+      b = b.replace(/(^|\n)(\s*)(\w+)\s*:\s*LOOP\b/gi, '$1$2<<$3>>\n$2LOOP');
+      /* END LOOP label; -> END LOOP label; (Oracle accepts this) */
+      return b;
+    }},
     /* EXIT WHEN -> IF LEAVE */
-    {s:'EXIT WHEN condition;',t:'IF condition THEN LEAVE label; END IF;', fwd: function(b) { b = b.replace(/\bEXIT\s+WHEN\s+(.+?)\s*;/gi, 'IF $1 THEN\n    LEAVE;\n  END IF;'); b = b.replace(/\bLEAVE\s*;/gi, 'LEAVE _loop1;'); return b; }, rev: null},
+    {s:'EXIT WHEN condition;',t:'IF condition THEN LEAVE label; END IF;', fwd: function(b) { b = b.replace(/\bEXIT\s+WHEN\s+(.+?)\s*;/gi, 'IF $1 THEN\n    LEAVE;\n  END IF;'); b = b.replace(/\bLEAVE\s*;/gi, 'LEAVE _loop1;'); return b; }, rev: function(b) {
+      /* LEAVE label; -> EXIT label; */
+      b = b.replace(/\bLEAVE\s+(\w+)\s*;/gi, 'EXIT $1;');
+      b = b.replace(/\bLEAVE\s*;/gi, 'EXIT;');
+      return b;
+    }},
     /* Cursor attrs */
-    {s:'cursor%NOTFOUND',t:'_done (\u914d\u5408 HANDLER FOR NOT FOUND)', fwd: _handleOracleCursorNotfoundToMysql, rev: null},
+    {s:'cursor%NOTFOUND',t:'_done (\u914d\u5408 HANDLER FOR NOT FOUND)', fwd: _handleOracleCursorNotfoundToMysql, rev: function(b) {
+      /* IF v_done THEN EXIT label; END IF; -> EXIT WHEN cursor%NOTFOUND; */
+      b = b.replace(/\bIF\s+(?:v_done|_done)\s*(?:=\s*1\s*)?\s*THEN\s*\n?\s*EXIT\s+(\w+)\s*;\s*\n?\s*END\s+IF\s*;/gi, 'EXIT WHEN NOT FOUND;');
+      b = b.replace(/\bIF\s+(?:v_done|_done)\s*(?:=\s*1\s*)?\s*THEN\s*\n?\s*EXIT\s*;\s*\n?\s*END\s+IF\s*;/gi, 'EXIT WHEN NOT FOUND;');
+      /* IF v_done THEN (standalone boolean test) -> IF v_done = 1 THEN */
+      b = b.replace(/\bIF\s+(v_done|_done)\s+THEN\b/gi, 'IF $1 = 1 THEN');
+      return b;
+    }},
     {s:'cursor%FOUND',t:'NOT _done', fwd: null, rev: null},
     {s:'cursor%ROWCOUNT',t:'ROW_COUNT()', fwd: null, rev: null},
     {s:'cursor%ISOPEN',t:'-- (MySQL \u65e0 %ISOPEN)', fwd: function(b) { return b.replace(/\bIF\s+(\w+)%ISOPEN\s+THEN\s+CLOSE\s+\1\s*;\s*END\s+IF\s*;/gi, '-- CLOSE $1 (safe close, MySQL has no %ISOPEN check)'); }, rev: null},
@@ -1502,12 +1523,26 @@ var _bodyRulesData = {
     /* INITCAP */
     {s:'INITCAP(x)',t:'CONCAT(UPPER(LEFT(x,1)), LOWER(SUBSTRING(x,2)))', fwd: function(b) { return b.replace(/\bINITCAP\s*\(\s*([^)]+)\)/gi, function(m, arg) { var a = arg.trim(); return 'CONCAT(UPPER(LEFT(' + a + ', 1)), LOWER(SUBSTRING(' + a + ", 2))) /* INITCAP: \u4ec5\u9996\u5b57\u6bcd\u5927\u5199, \u591a\u5355\u8bcd\u8bf7\u81ea\u5b9a\u4e49\u51fd\u6570 */"; }); }, rev: null},
     /* SQLCODE / SQLERRM */
-    {s:'SQLCODE',t:'@_err_code', fwd: function(b) { b = b.replace(/\bSQLERRM\b/g, '@_err_msg'); b = b.replace(/\bSQLCODE\b/g, '@_err_code'); return b; }, rev: function(b) { b = b.replace(/\b@_err_msg\b/g, 'SQLERRM'); b = b.replace(/\b@_err_code\b/g, 'SQLCODE'); return b; }},
+    {s:'SQLCODE',t:'@_err_code', fwd: function(b) { b = b.replace(/\bSQLERRM\b/g, '@_err_msg'); b = b.replace(/\bSQLCODE\b/g, '@_err_code'); return b; }, rev: function(b) { b = b.replace(/@_err_msg\b/g, 'SQLERRM'); b = b.replace(/@_err_code\b/g, 'SQLCODE'); return b; }},
     {s:'SQLERRM',t:'@_err_msg', fwd: null, rev: null},
     /* DBMS_UTILITY.FORMAT_ERROR_BACKTRACE */
     {s:'DBMS_UTILITY.FORMAT_ERROR_BACKTRACE',t:"'' (MySQL \u65e0\u7b49\u4ef7\u51fd\u6570)", fwd: function(b) { return b.replace(/\bDBMS_UTILITY\.FORMAT_ERROR_BACKTRACE\b/gi, "/* [\u6ce8\u610f: MySQL \u65e0\u7b49\u4ef7\u7684\u9519\u8bef\u5806\u6808\u51fd\u6570] */ ''"); }, rev: null},
     /* MERGE INTO */
-    {s:'MERGE INTO ... WHEN MATCHED/NOT MATCHED',t:'INSERT...ON DUPLICATE KEY UPDATE', fwd: _handleMergeToMysql, rev: null},
+    {s:'MERGE INTO ... WHEN MATCHED/NOT MATCHED',t:'INSERT...ON DUPLICATE KEY UPDATE', fwd: _handleMergeToMysql, rev: function(b) {
+      /* INSERT INTO tbl (cols) VALUES (vals) ON DUPLICATE KEY UPDATE col=VALUES(col), ... -> MERGE INTO */
+      return b.replace(/\bINSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*\n?\s*VALUES\s*\(([^)]+)\)\s*\n?\s*ON\s+DUPLICATE\s+KEY\s+UPDATE\s+([\s\S]*?);/gi,
+        function(m, tbl, cols, vals, updateClause) {
+          var colArr = cols.split(/\s*,\s*/);
+          var valArr = vals.split(/\s*,\s*/);
+          var pk = colArr[0].trim();
+          var srcCols = colArr.map(function(c, i) { return valArr[i].trim() + ' AS ' + c.trim(); }).join(', ');
+          var updateParts = updateClause.replace(/\bVALUES\s*\(\s*(\w+)\s*\)/gi, 'src.$1').split(/\s*,\s*/);
+          var updateSet = updateParts.map(function(p) { return 'tgt.' + p.trim().replace(/^(\w+)\s*=/, '$1 ='); }).join(',\n    ');
+          var insertCols = colArr.join(', ');
+          var insertVals = colArr.map(function(c) { return 'src.' + c.trim(); }).join(', ');
+          return 'MERGE INTO ' + tbl + ' tgt\nUSING (SELECT ' + srcCols + ' FROM DUAL) src\nON (tgt.' + pk + ' = src.' + pk + ')\nWHEN MATCHED THEN UPDATE SET\n    ' + updateSet + '\nWHEN NOT MATCHED THEN INSERT (' + insertCols + ')\n    VALUES (' + insertVals + ');';
+        });
+    }},
     /* CONCAT_WS (reverse) */
     {s:'CONCAT_WS(sep, a, b)',t:'(a || sep || b)', fwd: null, rev: _handleConcatWsMysqlToOracle},
     /* MySQL IF(cond,a,b) -> CASE WHEN (reverse) */
