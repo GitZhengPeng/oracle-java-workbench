@@ -1644,7 +1644,27 @@ var _bodyRulesData = {
     /* IFNULL -> COALESCE */
     {s:'IFNULL(a, b)',t:'COALESCE(a, b)', fwd: _rf('IFNULL','COALESCE'), rev: _handleCoalescePgToMysql},
     /* CAST AS SIGNED -> CAST AS INTEGER */
-    {s:'CAST(x AS SIGNED)',t:'CAST(x AS INTEGER)', fwd: function(b) { return b.replace(/\bCAST\s*\(\s*((?:[^,()]+|\((?:[^()]*|\([^()]*\))*\))+)\s+AS\s+SIGNED(?:\s+INTEGER)?\s*\)/gi, 'CAST($1 AS INTEGER)'); }, rev: null},
+    {s:'CAST(x AS SIGNED)',t:'CAST(x AS INTEGER)', fwd: function(b) {
+      var re = /\bCAST\s*\(/gi, m, result = '', last = 0;
+      while ((m = re.exec(b)) !== null) {
+        var start = m.index + m[0].length;
+        var depth = 1, j = start, inQ = false;
+        while (j < b.length && depth > 0) {
+          if (b[j] === "'" && !inQ) inQ = true;
+          else if (b[j] === "'" && inQ) { if (j+1 < b.length && b[j+1] === "'") j++; else inQ = false; }
+          else if (!inQ) { if (b[j] === '(') depth++; else if (b[j] === ')') depth--; }
+          if (depth > 0) j++;
+        }
+        var inner = b.substring(start, j);
+        var asMatch = inner.match(/^([\s\S]+)\s+AS\s+SIGNED(?:\s+INTEGER)?\s*$/i);
+        if (asMatch) {
+          result += b.substring(last, m.index) + 'CAST(' + asMatch[1].trimEnd() + ' AS INTEGER)';
+          last = j + 1;
+        }
+      }
+      if (last === 0) return b;
+      return result + b.substring(last);
+    }, rev: null},
     {s:'CAST(x AS UNSIGNED)',t:'CAST(x AS INTEGER)', fwd: null, rev: null},
     /* NOW -> CURRENT_DATE */
     {s:'NOW()',t:'CURRENT_DATE', fwd: function(b) { return b.replace(/\bNOW\s*\(\s*\)/gi, 'CURRENT_DATE'); }, rev: function(b) { b = b.replace(/\bCLOCK_TIMESTAMP\s*\(\s*\)/gi, 'NOW()'); b = b.replace(/\bCURRENT_DATE\b/gi, 'NOW()'); return b; }},
