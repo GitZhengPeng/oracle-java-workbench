@@ -6,7 +6,7 @@ function makeTable() {
   return { name:'', comment:'', columns:[], primaryKey:null, uniqueKeys:[], indexes:[], foreignKeys:[], partition:null, extra:{} };
 }
 function makeColumn() {
-  return { name:'', type:'', precision:null, scale:null, length:null, nullable:true, defaultValue:null, comment:'', autoIncrement:false, rawType:'' };
+  return { name:'', type:'', precision:null, scale:null, length:null, nullable:true, defaultValue:null, comment:'', autoIncrement:false, rawType:'', extra:{} };
 }
 function makeView() {
   return { name:'', columns:[], query:'', comment:'', withCheckOption:false, checkOptionType:null, readOnly:false, orReplace:true, force:false, algorithm:null };
